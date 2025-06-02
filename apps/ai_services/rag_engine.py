@@ -26,7 +26,23 @@ VECTOR_STORE_DIR = os.path.join(settings.BASE_DIR, "vector_store")
 os.makedirs(VECTOR_STORE_DIR, exist_ok=True)
 
 class RAGEngine:
-    # RAG引擎，用于处理文档和生成答案
+    """
+    RAG引擎，用于处理文档和生成答案
+    
+    主要功能:
+    1. 文档处理：将文档分割成块并向量化存储
+    2. 检索功能：根据查询检索相关文档块
+    3. 答案生成：根据检索结果生成回答
+    4. 测验生成：基于文档或主题生成测验题目
+    5. 摘要生成：为文档生成摘要
+    6. 对话管理：支持多轮对话和上下文维护
+    
+    多轮对话使用说明:
+    - 对话历史格式: 列表，每个元素是包含 'is_user'(布尔值) 和 'content'(字符串) 的字典
+    - 例如: [{'is_user': True, 'content': '用户问题'}, {'is_user': False, 'content': '系统回答'}]
+    - 使用 process_chat_query 方法处理对话，自动处理有/无文档情况
+    - 系统会自动优化长对话历史，包括过滤不相关内容和生成摘要
+    """
     
     # 默认配置参数
     DEFAULT_CONFIG = {
@@ -271,6 +287,123 @@ class RAGEngine:
             logger.exception(f"检索相关分块失败: {e}")
             return []
 
+    def _format_conversation_history(self, conversation_history: List[Dict[str, Any]], max_rounds: int = 5) -> str:
+        """
+        格式化对话历史为提示词中可用的格式
+        
+        Args:
+            conversation_history: 对话历史列表，支持两种格式:
+                1. [{'is_user': bool, 'content': str}, ...]
+                2. [{'role': 'user'/'assistant', 'content': str}, ...]
+            max_rounds: 最多保留的对话轮数
+            
+        Returns:
+            格式化的对话历史字符串
+        """
+        if not conversation_history:
+            return ""
+            
+        # 限制历史长度，避免超过token限制
+        recent_history = conversation_history[-max_rounds*2:] if len(conversation_history) > max_rounds*2 else conversation_history
+        
+        formatted = ""
+        for msg in recent_history:
+            # 处理不同格式的对话历史
+            if 'is_user' in msg:
+                role = "用户" if msg.get('is_user', False) else "助手"
+            elif 'role' in msg:
+                role = "用户" if msg.get('role', '') == 'user' else "助手"
+            else:
+                # 无法确定角色时的默认处理
+                logger.warning("对话历史消息缺少角色信息，默认设为用户")
+                role = "未知"
+                
+            content = msg.get('content', '').strip()
+            if content:
+                formatted += f"{role}: {content}\n\n"
+        
+        return formatted.strip()
+    
+    def answer_query_with_history(self, query: str, conversation_history: List[Dict[str, Any]], 
+                                 top_k_retrieval: int = None) -> Dict[str, Any]:
+        """
+        基于对话历史回答用户查询
+        
+        Args:
+            query: 当前用户查询
+            conversation_history: 对话历史列表，每个项目包含 {'is_user': bool, 'content': str}
+            top_k_retrieval: 检索结果数量
+            
+        Returns:
+            包含生成答案的字典
+        """
+        if top_k_retrieval is None:
+            top_k_retrieval = self.config['top_k_retrieval']
+        
+        start_time = time.time()
+        
+        try:
+            # 1. 提取对话历史以构建上下文
+            formatted_history = self._format_conversation_history(conversation_history)
+            
+            # 2. 准备变量字典
+            variables = {
+                'query': query,
+                'conversation_history': formatted_history
+            }
+            
+            # 3. 如果有文档，检索相关文档块并添加到变量中
+            has_document_context = False
+            if self.document:
+                relevant_chunks = self.retrieve_relevant_chunks(query, top_k=top_k_retrieval)
+                if relevant_chunks:
+                    has_document_context = True
+                    references = "\n\n".join([chunk.content for chunk in relevant_chunks])
+                    variables['reference_text'] = references
+                    
+                    # 保存检索到的文档块，用于返回源引用
+                    retrieved_chunks = relevant_chunks
+                else:
+                    # 文档存在但没有检索到相关内容
+                    retrieved_chunks = []
+            else:
+                # 无文档模式
+                retrieved_chunks = []
+            
+            # 4. 使用带有对话历史的聊天提示模板
+            prompt = PromptManager.render_by_type('chat_with_history_response', variables)
+            
+            # 5. 调用LLM生成答案
+            result = self.llm_client.generate_text(
+                prompt=prompt,
+                task_type="chat"
+            )
+            
+            processing_time = time.time() - start_time
+            
+            # 6. 准备返回结果
+            response = {
+                'answer': result.get('text', '无法生成回答'),
+                'sources': [{'chunk_id': chunk.id, 'content': chunk.content[:200] + '...' if len(chunk.content) > 200 else chunk.content} 
+                           for chunk in retrieved_chunks],
+                'processing_time': processing_time,
+                'is_generic_answer': not has_document_context
+            }
+            
+            return response
+            
+        except Exception as e:
+            logger.exception(f"使用对话历史回答查询失败: {str(e)}")
+            processing_time = time.time() - start_time
+            
+            return {
+                'answer': f"生成回答时出错: {str(e)}",
+                'sources': [],
+                'processing_time': processing_time,
+                'error': str(e),
+                'is_generic_answer': True
+            }
+
     def generate_answer(self, query: str, relevant_chunks: List[DocumentChunk]) -> Dict[str, Any]:
         """根据查询和相关文档块生成答案"""
         if not relevant_chunks:
@@ -316,12 +449,20 @@ class RAGEngine:
         if not self.document and not self.vector_store:
              # 非文档模式，直接调用LLM
             logger.info(f"非文档模式回答查询: {query}")
+            
+            # 准备变量字典 - 不包含reference_text
+            variables = {
+                'query': query
+            }
+            
             prompt = PromptManager.render_by_type(
                 template_type='chat_response', 
-                variables={'query': query, 'reference_text': '通用知识库'}
+                variables=variables
             )
+            
             response = self.llm_client.generate_text(prompt=prompt, task_type='chat')
             response['retrieved_chunks'] = []
+            response['is_generic_answer'] = True
             return response
 
         # 1. 确保文档已处理和向量库已加载
@@ -338,9 +479,38 @@ class RAGEngine:
         relevant_chunks = self.retrieve_relevant_chunks(query, top_k=top_k_retrieval)
         
         # 3. 生成答案
-        answer_response = self.generate_answer(query, relevant_chunks)
+        has_document_context = len(relevant_chunks) > 0
         
-        return answer_response
+        # 准备变量字典
+        variables = {
+            'query': query
+        }
+        
+        # 如果有相关文档块，添加到变量中
+        if has_document_context:
+            context_text = "\n\n".join([chunk.content for chunk in relevant_chunks])
+            variables['reference_text'] = context_text
+        
+        # 使用聊天回复模板
+        prompt = PromptManager.render_by_type(
+            template_type='chat_response', 
+            variables=variables
+        )
+        
+        # 调用LLM生成答案
+        response = self.llm_client.generate_text(
+            prompt=prompt, 
+            task_type='chat'
+        )
+        
+        # 添加检索结果到响应中
+        response['retrieved_chunks'] = [
+            {'id': chunk.id, 'content': chunk.content[:200] + "..."} for chunk in relevant_chunks
+        ]
+        
+        response['is_generic_answer'] = not has_document_context
+        
+        return response
 
     def generate_quiz(self, question_count: int = None, question_types: List[str] = None, difficulty: str = None) -> Dict[str, Any]:
         """为当前文档生成测验
@@ -936,6 +1106,267 @@ class RAGEngine:
             difficulty=difficulty
         )
 
+    def _summarize_conversation(self, conversation_history: List[Dict[str, Any]], max_tokens: int = 1000) -> str:
+        """
+        将长对话历史摘要为简短的上下文描述
+        
+        Args:
+            conversation_history: 对话历史列表
+            max_tokens: 最大token数
+            
+        Returns:
+            对话摘要
+        """
+        if not conversation_history or len(conversation_history) < 5:
+            return ""
+            
+        # 准备摘要提示词
+        formatted_history = self._format_conversation_history(conversation_history)
+        
+        prompt = f"""请将以下对话历史摘要为一个简短的上下文描述，用于后续对话。
+摘要应该包含关键信息点、重要概念和用户特别关注的内容。
+
+对话历史：
+{formatted_history}
+
+请提供简明扼要的摘要，不超过200字："""
+        
+        response = self.llm_client.generate_text(
+            prompt=prompt,
+            system_prompt="你是一个专业的对话摘要助手，擅长提取对话中的关键信息和重要上下文。",
+            max_tokens=max_tokens,
+            task_type="summary"
+        )
+        
+        return response.get('text', '')
+    
+    def _filter_relevant_history(self, conversation_history: List[Dict[str, Any]], 
+                                query: str, max_turns: int = 5) -> List[Dict[str, Any]]:
+        """
+        根据当前查询过滤出最相关的对话历史记录
+        
+        Args:
+            conversation_history: 对话历史列表
+            query: 当前查询
+            max_turns: 最大对话轮数
+            
+        Returns:
+            过滤后的对话历史
+        """
+        if not conversation_history or len(conversation_history) < max_turns * 2:
+            return conversation_history
+        
+        # 1. 先保留最近的几轮对话
+        recent_turns = conversation_history[-max_turns * 2:]
+        
+        # 如果对话历史很长，尝试使用语义相似度找出相关的历史消息
+        if len(conversation_history) > max_turns * 3:
+            try:
+                # 提取用户消息
+                user_messages = [msg for msg in conversation_history[:-max_turns * 2] if msg.get('is_user', False)]
+                if user_messages:
+                    # 简单方法：使用关键词匹配
+                    query_words = set(query.lower().split())
+                    relevant_messages = []
+                    
+                    for msg in user_messages:
+                        content = msg.get('content', '').lower()
+                        # 计算匹配的关键词数量
+                        matching_words = len([word for word in query_words if word in content])
+                        if matching_words > 0:
+                            # 找出对应的回复
+                            idx = conversation_history.index(msg)
+                            if idx + 1 < len(conversation_history) and not conversation_history[idx + 1].get('is_user', True):
+                                relevant_messages.append(msg)
+                                relevant_messages.append(conversation_history[idx + 1])
+                    
+                    # 限制额外相关消息的数量
+                    max_additional = max_turns * 2
+                    if relevant_messages and len(relevant_messages) <= max_additional:
+                        # 将相关消息添加到结果中
+                        return relevant_messages + recent_turns
+            except Exception as e:
+                logger.warning(f"过滤相关历史记录时出错: {e}")
+        
+        return recent_turns
+    
+    def _optimize_conversation_history(self, conversation_history: List[Dict[str, Any]], 
+                                      query: str, max_turns: int = 5) -> List[Dict[str, Any]]:
+        """
+        优化对话历史，包括过滤和摘要
+        
+        Args:
+            conversation_history: 对话历史列表
+            query: 当前查询
+            max_turns: 最大对话轮数
+            
+        Returns:
+            优化后的对话历史
+        """
+        if not conversation_history:
+            return []
+            
+        # 如果对话历史较短，直接返回
+        if len(conversation_history) <= max_turns * 2:
+            return conversation_history
+            
+        # 1. 过滤出最相关的历史
+        filtered_history = self._filter_relevant_history(conversation_history, query, max_turns)
+        
+        # 2. 如果历史仍然很长，考虑生成摘要
+        if len(filtered_history) > max_turns * 3:
+            # 生成前半部分历史的摘要
+            summary_part = filtered_history[:-max_turns * 2]
+            recent_part = filtered_history[-max_turns * 2:]
+            
+            summary_text = self._summarize_conversation(summary_part)
+            
+            if summary_text:
+                # 用摘要替换前半部分历史
+                optimized_history = [
+                    {'is_user': False, 'content': f"[历史摘要] {summary_text}"}
+                ] + recent_part
+                return optimized_history
+        
+        return filtered_history
+    
+    def process_chat_query(self, query: str, conversation_history: List[Dict[str, Any]] = None, 
+                         document_id: int = None, normalize_history: bool = True) -> Dict[str, Any]:
+        """
+        处理聊天查询的统一接口，支持有文档和无文档模式，支持使用对话历史
+        
+        Args:
+            query: 用户查询
+            conversation_history: 对话历史列表，可选，支持多种格式
+            document_id: 文档ID，可选，如果提供则使用该文档作为上下文
+            normalize_history: 是否标准化对话历史格式，设为True可自动处理不同格式
+            
+        Returns:
+            包含生成答案的字典
+        """
+        start_time = time.time()
+        
+        # 检查对话历史是否为空
+        if conversation_history is None:
+            conversation_history = []
+        
+        # 标准化对话历史格式，确保统一的格式 {'is_user': bool, 'content': str}
+        if normalize_history and conversation_history:
+            normalized_history = []
+            for msg in conversation_history:
+                if 'is_user' in msg:
+                    # 已经是标准格式
+                    normalized_history.append(msg)
+                elif 'role' in msg:
+                    # 转换 'role' 格式到 'is_user' 格式
+                    normalized_history.append({
+                        'is_user': msg['role'] == 'user',
+                        'content': msg.get('content', '')
+                    })
+                else:
+                    # 无法识别的格式，尽量猜测
+                    logger.warning("遇到未知格式的对话历史消息，尝试猜测格式")
+                    if any(key in msg for key in ['user', 'is_user', 'sender', 'from_user']):
+                        # 尝试猜测是否为用户消息
+                        is_user = bool(msg.get('user') or msg.get('is_user') or 
+                                      msg.get('sender') == 'user' or msg.get('from_user'))
+                        content = msg.get('content', msg.get('message', msg.get('text', '')))
+                        if content:
+                            normalized_history.append({
+                                'is_user': is_user,
+                                'content': content
+                            })
+            
+            # 替换为标准化后的历史
+            conversation_history = normalized_history
+            
+        # 优化对话历史，控制长度和相关性
+        if len(conversation_history) > 4:  # 只在对话超过2轮时优化
+            optimized_history = self._optimize_conversation_history(conversation_history, query)
+            logger.info(f"对话历史优化: 原始长度={len(conversation_history)}, 优化后长度={len(optimized_history)}")
+            conversation_history = optimized_history
+        
+        # 根据不同情况调用相应方法
+        if document_id:
+            # 如果指定了文档，确保文档已加载
+            if not self.document or self.document.id != document_id:
+                # 重新初始化RAG引擎
+                self.__init__(document_id=document_id, llm_client=self.llm_client, config=self.config)
+                
+            # 如果有对话历史，使用对话历史版本的方法
+            if conversation_history:
+                result = self.answer_query_with_history(query, conversation_history)
+            else:
+                # 无对话历史，使用普通方法
+                result = self.answer_query(query)
+        else:
+            # 无文档模式
+            if conversation_history:
+                # 有对话历史的无文档模式
+                result = self.generate_general_answer_with_history(query, conversation_history)
+            else:
+                # 无对话历史的无文档模式
+                # 使用LLM客户端直接生成回答
+                llm_response = self.llm_client.generate_text(
+                    prompt=query,
+                    system_prompt="你是一个专业的学习助手。请清晰、准确地回答用户的问题。",
+                    task_type="chat"
+                )
+                
+                result = {
+                    'answer': llm_response.get('text', '无法生成回答'),
+                    'sources': [],
+                    'processing_time': time.time() - start_time,
+                    'is_generic_answer': True
+                }
+        
+        # 添加处理时间
+        if 'processing_time' not in result:
+            result['processing_time'] = time.time() - start_time
+            
+        return result
+    
+    def generate_general_answer_with_history(self, query: str, conversation_history: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        生成通用对话的回答（不依赖特定文档），但使用对话历史作为上下文
+        
+        Args:
+            query: 用户查询
+            conversation_history: 对话历史列表，每个项目包含 {'is_user': bool, 'content': str}
+            
+        Returns:
+            包含生成答案的字典
+        """
+        start_time = time.time()
+        
+        # 格式化对话历史
+        formatted_history = self._format_conversation_history(conversation_history)
+        
+        # 准备变量字典 - 不包含reference_text
+        variables = {
+            'query': query,
+            'conversation_history': formatted_history
+        }
+        
+        # 使用带有对话历史的聊天提示模板
+        prompt = PromptManager.render_by_type('chat_with_history_response', variables)
+        
+        # 调用LLM生成回答
+        result = self.llm_client.generate_text(
+            prompt=prompt,
+            task_type="chat"
+        )
+        
+        processing_time = time.time() - start_time
+        
+        # 准备返回结果
+        return {
+            'answer': result.get('text', '无法生成回答'),
+            'sources': [],
+            'processing_time': processing_time,
+            'is_generic_answer': True
+        }
+
 # 可以在这里添加一些辅助函数，例如初始化默认模板等
 def initialize_ai_services():
     """初始化AI服务，例如创建默认的提示词模板"""
@@ -956,4 +1387,4 @@ def initialize_ai_services():
         if 'no such table' in str(e).lower():
             logger.warning("AI服务相关表不存在，跳过初始化")
         else:
-            logger.exception(f"初始化AI服务时出错: {str(e)}") 
+            logger.exception(f"初始化AI服务时出错: {str(e)}")

@@ -63,6 +63,18 @@ class PromptManager:
                 template_content = template.content
             else:
                 template_content = template
+            
+            # 处理参考资料部分
+            if '$reference_text_section' in template_content:
+                if variables.get('reference_text'):
+                    variables['reference_text_section'] = f"""参考资料:
+{variables.get('reference_text')}"""
+                    variables['reference_instruction'] = "如果参考资料中没有足够的信息来回答，请坦诚告知你无法基于给定资料回答，但可以提供一般性的建议。"
+                    variables['citation_instruction'] = "引用参考资料中的相关内容来支持你的回答"
+                else:
+                    variables['reference_text_section'] = ""
+                    variables['reference_instruction'] = "基于你的知识提供最准确的回答。"
+                    variables['citation_instruction'] = "确保回答准确且有帮助"
                 
             # 使用string.Template进行渲染
             template_obj = Template(template_content)
@@ -93,7 +105,9 @@ class PromptManager:
             # 返回默认提示词
             default_templates = {
                 'quiz_generation': PromptManager.get_default_quiz_template(),
+                'quiz_without_doc': PromptManager.get_default_quiz_without_doc_template(),
                 'chat_response': PromptManager.get_default_chat_template(),
+                'chat_with_history_response': PromptManager.get_default_chat_with_history_template(),
                 'explanation': PromptManager.get_default_explanation_template(),
                 'summary': PromptManager.get_default_summary_template(),
             }
@@ -162,20 +176,46 @@ class PromptManager:
     def get_default_chat_template() -> str:
         # 获取默认的聊天回复模板
         return """
-        你是一个专业的学习助手。请使用以下参考资料回答用户的问题。
+        你是一个专业的学习助手。请回答用户的问题。
 
-        参考资料:
-        $reference_text
+        $reference_text_section
 
         用户问题: $query
 
-        请提供一个清晰、准确的回答，直接回应用户的问题。如果参考资料中没有足够的信息来回答，请坦诚告知你无法基于给定资料回答，但可以提供一般性的建议。
+        请提供一个清晰、准确的回答，直接回应用户的问题。$reference_instruction
 
         回答时:
         1. 使用简洁易懂的语言
         2. 如有必要，可以分点列出信息
-        3. 引用参考资料中的相关内容来支持你的回答
-        4. 不要编造参考资料中没有的信息
+        3. $citation_instruction
+        4. 不要编造不确定的信息
+
+        回答:
+        """
+    
+    @staticmethod
+    def get_default_chat_with_history_template() -> str:
+        # 获取默认的带对话历史的聊天回复模板
+        return """
+        你是一个专业的学习助手。请根据对话历史回答用户的问题。
+
+        $reference_text_section
+
+        对话历史:
+        $conversation_history
+
+        用户当前问题: $query
+
+        请提供一个清晰、准确的回答，直接回应用户的问题。回答时考虑之前的对话历史，保持上下文连贯性。
+        如果需要引用之前对话中提到的信息，请明确指出。
+        $reference_instruction
+
+        回答要求:
+        1. 使用简洁易懂的语言
+        2. 如有必要，分点列出信息
+        3. $citation_instruction
+        4. 不要编造不确定的信息
+        5. 保持与之前对话的连贯性
 
         回答:
         """
@@ -316,6 +356,14 @@ class PromptManager:
                     'template_type': 'chat_response',
                     'content': PromptManager.get_default_chat_template(),
                     'variables': ['reference_text', 'query'],
+                    'version': '1.0',
+                    'is_active': True
+                },
+                {
+                    'name': '带历史聊天回复',
+                    'template_type': 'chat_with_history_response',
+                    'content': PromptManager.get_default_chat_with_history_template(),
+                    'variables': ['reference_text', 'conversation_history', 'query'],
                     'version': '1.0',
                     'is_active': True
                 },
