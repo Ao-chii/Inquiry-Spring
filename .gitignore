@@ -11,8 +11,3 @@ InquirySpring.code-workspace
 .specstory/
 .cursorindexingignore
 fix_ai_services.py
-apps/ai_services/migrations/
-apps/documents/migrations/
-apps/quiz/migrations/
-apps/chat/migrations/
-
