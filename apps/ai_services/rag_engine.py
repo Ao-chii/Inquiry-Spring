@@ -442,7 +442,7 @@ class RAGEngine:
         return response
 
     def answer_query(self, query: str, top_k_retrieval: int = None) -> Dict[str, Any]:
-        """处理用户查询，包括检索和生成"""
+        """处理用户查询，包括检索和生成，并支持来源追溯"""
         if top_k_retrieval is None:
             top_k_retrieval = self.config['top_k_retrieval']
             
@@ -486,9 +486,22 @@ class RAGEngine:
             'query': query
         }
         
-        # 如果有相关文档块，添加到变量中
+        # 如果有相关文档块，格式化并添加到变量中
+        source_mapping = {}
         if has_document_context:
-            context_text = "\n\n".join([chunk.content for chunk in relevant_chunks])
+            context_parts = []
+            for i, chunk in enumerate(relevant_chunks, 1):
+                source_id = str(i)
+                # 为每个块添加源标识符
+                context_parts.append(f"[Source {source_id}]\n{chunk.content}")
+                # 创建源映射，以便后续返回给前端
+                source_mapping[source_id] = {
+                    'id': chunk.id, 
+                    'content': chunk.content,
+                    'document_id': chunk.document.id,
+                    'document_title': chunk.document.title
+                }
+            context_text = "\n\n---\n\n".join(context_parts)
             variables['reference_text'] = context_text
         
         # 使用聊天回复模板
@@ -503,26 +516,33 @@ class RAGEngine:
             task_type='chat'
         )
         
-        # 添加检索结果到响应中
-        response['retrieved_chunks'] = [
-            {'id': chunk.id, 'content': chunk.content[:200] + "..."} for chunk in relevant_chunks
-        ]
-        
-        response['is_generic_answer'] = not has_document_context
-        
-        return response
+        # 返回结构化的响应
+        return {
+            "answer": response.get("text", "无法生成回答。"),
+            "sources": source_mapping, # 返回所有可能被引用的来源
+            "is_generic_answer": not has_document_context,
+            "llm_response": response # 保留原始LLM响应供调试
+        }
 
-    def generate_quiz(self, question_count: int = None, question_types: List[str] = None, difficulty: str = None) -> Dict[str, Any]:
-        """为当前文档生成测验
+    def generate_quiz(self, topic: str, question_count: int = None, question_types: List[str] = None, 
+                      difficulty: str = None, top_k_retrieval: int = None, 
+                      user_requirements: str = "") -> Dict[str, Any]:
+        """为当前文档生成测验题目，使用RAG技术检索相关内容
         
         Args:
+            topic: 测验主题或关键词，用于检索相关文档块
             question_count: 生成题目的数量
             question_types: 题目类型列表，可包含 'MC'(单选), 'MCM'(多选), 'TF'(判断), 'FB'(填空), 'SA'(简答)
-            difficulty: 难度级别，'easy'=简单，'medium'=中等，'hard'=困难, 'master'=极难
+            difficulty: 难度级别，'easy'=简单，'medium'=中等，'hard'=困难
+            top_k_retrieval: 检索的文档块数量
+            user_requirements: 用户的额外需求或约束
             
         Returns:
             包含生成测验结果的字典
         """
+        if not self.document:
+            return {"error": "未加载文档，无法生成测验。"}
+            
         # 使用配置的默认值
         if question_count is None:
             question_count = self.config['default_question_count']
@@ -530,50 +550,59 @@ class RAGEngine:
             question_types = self.config['default_question_types']
         if difficulty is None:
             difficulty = self.config['default_difficulty']
+        if top_k_retrieval is None:
+            top_k_retrieval = max(5, self.config.get('top_k_retrieval', 5))  # 测验生成通常需要更多上下文
             
-        if not self.document:
-            return {"error": "未加载文档，无法生成测验。请使用 generate_quiz_without_doc 方法生成无文档测验。"}
-        
+        # 确保文档已处理
         if not self.document.is_processed:
             success = self.process_and_embed_document()
             if not success:
                 return {"error": "文档处理失败，无法生成测验。"}
-
-        # 获取文档完整内容
-        doc_content = self.document.content
-        if self.document.file:
-            try:
-                doc_content = self.document.file.read().decode('utf-8')
-            except Exception:
-                pass # 使用数据库中的content作为后备
+                
+        # 使用主题检索相关文档块
+        relevant_chunks = self.retrieve_relevant_chunks(topic, top_k=top_k_retrieval)
+        
+        if not relevant_chunks:
+            return {
+                "error": f"未找到与主题'{topic}'相关的内容，无法生成专项测验。",
+                "suggestion": "请尝试使用更广泛的主题关键词。"
+            }
+            
+        # 合并相关文档块内容
+        context_text = "\n\n".join([chunk.content for chunk in relevant_chunks])
+        
+        # 记录检索的块，用于后期追溯测验题来源
+        chunk_info = [
+            {"id": chunk.id, "content": chunk.content[:100] + "..." if len(chunk.content) > 100 else chunk.content} 
+            for chunk in relevant_chunks
+        ]
         
         if not question_types:
-            question_types = ['MC', 'TF'] # 默认单选题和判断题
+            question_types = ['MC', 'TF']  # 默认单选题和判断题
         
         # 确保所有题型有效
         valid_types = ['MC', 'MCM', 'TF', 'FB', 'SA']
         question_types = [t for t in question_types if t in valid_types]
         
         if not question_types:
-            question_types = ['MC'] # 如果没有有效题型，默认使用单选题
+            question_types = ['MC']  # 如果没有有效题型，默认使用单选题
         
         # 添加system_prompt，引导LLM生成更标准的格式
-        system_prompt = """你是一个专业的教育测验出题专家。请严格按照指定格式生成测验题目。每个题目必须包含完整的字段信息，尤其是:
-1. 确保每个题目都包含 knowledge_points 字段，列出该题目涉及的知识点
-2. 对多选题 (MCM)，正确答案必须是选项字母的数组，如 ["A", "C"]
-3. 题目难度需符合要求
-4. JSON 格式必须完全正确
-5. 答案解析必须详细且引用原文
-
-请仔细检查生成的 JSON 格式，确保其完整有效。"""
+        system_prompt = """你是一个专业的教育测验出题专家。请严格按照指定格式生成测验题目。
+每个题目必须基于提供的文档片段中的信息，不要编造不在文档中的内容。
+确保生成的JSON格式完整正确，并包含所有必要字段。
+特别注意：每个题目都必须包含source_passage字段，标明题目内容来源于哪一段原文，并提供详细的解析。"""
         
         prompt_variables = {
-            'content': doc_content,
+            'reference_text': context_text,
             'question_count': question_count,
-            'question_types': ", ".join(question_types), # LLM可能更喜欢字符串形式
-            'difficulty': difficulty
+            'question_types': ", ".join(question_types),
+            'difficulty': difficulty,
+            'topic': topic,  # 添加主题作为提示的一部分
+            'user_requirements': user_requirements  # 添加用户需求
         }
         
+        # 使用测验生成模板
         prompt = PromptManager.render_by_type(
             template_type='quiz_generation', 
             variables=prompt_variables
@@ -586,8 +615,7 @@ class RAGEngine:
             task_type='quiz_generation'
         )
         
-        # 解析LLM返回的JSON格式题目，并存入数据库 (Question模型)
-        # 这里需要健壮的JSON解析和错误处理
+        # 解析LLM返回的JSON格式题目
         try:
             # 尝试从LLM响应中提取JSON部分
             text_response = response.get("text", "")
@@ -604,7 +632,6 @@ class RAGEngine:
                 quiz_data = json.loads(json_str)
             except json.JSONDecodeError:
                 # 可能是LLM生成的JSON不标准，尝试清理一下
-                # 例如，处理注释、尾部逗号等
                 cleaned_json = re.sub(r'//.*?(\n|$)', '', json_str)  # 移除单行注释
                 cleaned_json = re.sub(r'/\*.*?\*/', '', cleaned_json, flags=re.DOTALL)  # 移除多行注释
                 cleaned_json = re.sub(r',(\s*[\]}])', r'\1', cleaned_json)  # 移除尾部逗号
@@ -664,28 +691,13 @@ class RAGEngine:
                 
                 # 确保知识点字段存在
                 if 'knowledge_points' not in question or not question['knowledge_points']:
-                    # 如果没有知识点，尝试从问题内容和解释中提取关键词作为知识点
-                    content = question.get('content', '')
-                    explanation = question.get('explanation', '')
-                    
-                    # 使用简单的启发式方法提取可能的知识点
-                    # 这只是一个简单示例，实际中可能需要更复杂的NLP方法
-                    combined_text = f"{content} {explanation}"
-                    
-                    # 尝试从解析中找出关键概念（通常是粗体或引用的文本）
-                    key_concepts = re.findall(r'\*\*(.*?)\*\*|\*(.*?)\*|"(.*?)"|\'(.*?)\'|「(.*?)」', combined_text)
-                    extracted_concepts = []
-                    for concept_match in key_concepts:
-                        # findall返回的是一个元组，需要找出非空元素
-                        concept = next((c for c in concept_match if c), None)
-                        if concept and len(concept) > 1:  # 忽略太短的概念
-                            extracted_concepts.append(concept)
-                    
-                    if extracted_concepts:
-                        question['knowledge_points'] = extracted_concepts
-                    else:
-                        # 如果没有明显的关键概念，使用题目的主题作为知识点
-                        question['knowledge_points'] = ["基础概念"]
+                    # 如果没有知识点，使用主题作为默认知识点
+                    question['knowledge_points'] = [topic]
+                
+                # 确保每个题目都有解析
+                if 'explanation' not in question or not question['explanation']:
+                    logger.warning(f"题目 #{i+1} 缺少解析，将添加默认解析")
+                    question['explanation'] = f"该题目考察了关于{topic}的知识点。正确答案是{question['correct_answer']}。"
                 
                 # 更新题目并添加到处理后的列表
                 question['type'] = q_type
@@ -699,14 +711,18 @@ class RAGEngine:
             
             quiz_obj = Quiz.objects.create(
                 document=self.document,
-                title=f"{self.document.title} 测验",
-                description=f"基于文档《{self.document.title}》自动生成的测验",
+                title=f"{self.document.title} - {topic} 测验",
+                description=f"基于主题「{topic}」从文档《{self.document.title}》中生成的测验",
                 difficulty_level=difficulty,
                 total_questions=len(processed_quiz_data),
                 config={
                     'question_types': question_types,
                     'question_count': question_count,
-                    'generated_time': time.time()
+                    'generated_time': time.time(),
+                    'topic': topic,
+                    'rag_generated': True,  # 标记为RAG生成的测验
+                    'retrieved_chunks': [{'id': chunk.id, 'similarity_score': getattr(chunk, 'similarity_score', 0)} 
+                                       for chunk in relevant_chunks]
                 }
             )
             
@@ -720,11 +736,14 @@ class RAGEngine:
                     explanation=q_data.get('explanation', ''),
                     source_passage=q_data.get('source_passage', ''),
                     difficulty=q_data.get('difficulty', difficulty),
-                    knowledge_points=q_data.get('knowledge_points', []),
+                    knowledge_points=q_data.get('knowledge_points', [topic]),
                     order=i + 1
                 )
             
             response['quiz_id'] = quiz_obj.id
+            
+            # 添加检索到的文档块信息
+            response['retrieved_chunks'] = chunk_info
             
         except json.JSONDecodeError as e:
             logger.error(f"解析测验题目JSON失败: {e}. LLM原始输出: {response.get('text')}")
@@ -737,12 +756,11 @@ class RAGEngine:
             
         return response
 
-    def generate_summary(self, summary_length: str = None, include_outline: bool = None) -> Dict[str, Any]:
+    def generate_summary(self, summary_length: str = None) -> Dict[str, Any]:
         """为当前文档生成摘要
         
         Args:
             summary_length: 摘要长度，可选值 'short'（短）, 'medium'（中）, 'long'（长）
-            include_outline: 是否包含结构大纲
             
         Returns:
             包含生成摘要结果的字典
@@ -750,8 +768,6 @@ class RAGEngine:
         # 使用配置的默认值
         if summary_length is None:
             summary_length = self.config['default_summary_length']
-        if include_outline is None:
-            include_outline = self.config['default_include_outline']
             
         if not self.document:
             return {"error": "未加载文档，无法生成摘要。"}
@@ -765,26 +781,11 @@ class RAGEngine:
         
         # 设置系统提示词
         system_prompt = """你是一个专业的文档分析和总结专家。请基于提供的文档内容生成一个全面、结构清晰的摘要。
-摘要应该忠实原文，不添加不存在的内容，保持客观和准确。按照要求的长度和格式进行组织。"""
+摘要应该忠实原文，不添加不存在的内容，保持客观和准确。"""
         
-        if include_outline:
-            system_prompt += "请先生成一个结构化的大纲，然后再提供详细摘要。大纲应当清晰地展示文档的主要章节和关键点。"
-        
-        # 根据长度设置指导
-        length_guide = {
-            'short': "生成一个简短摘要，约为原文的5-10%，只包含最核心的信息点。",
-            'medium': "生成一个中等长度的摘要，约为原文的10-15%，包含主要论点和关键细节。",
-            'long': "生成一个详细摘要，约为原文的15-25%，包含主要论点、关键证据和重要细节，但仍保持简洁。"
-        }
-        
-        # 确保长度参数有效
-        if summary_length not in length_guide:
-            summary_length = 'medium'
-            
+        # 准备变量字典
         prompt_variables = {
-            'content': doc_content,
-            'length_requirement': length_guide[summary_length],
-            'outline_requirement': "请先提供一个结构化大纲，然后再给出详细摘要。" if include_outline else ""
+            'content': doc_content
         }
         
         # 获取渲染后的提示词
@@ -802,8 +803,6 @@ class RAGEngine:
         
         # 添加额外信息到响应
         response['summary_config'] = {
-            'length': summary_length,
-            'include_outline': include_outline,
             'document_title': self.document.title,
             'document_id': self.document.id
         }
@@ -840,17 +839,17 @@ class RAGEngine:
         response = self.llm_client.generate_text(prompt=prompt, task_type='explanation')
         return response
 
-    def generate_quiz_without_doc(self, topic: str, constraints: str = "", 
+    def generate_quiz_without_doc(self, topic: str, user_requirements: str = "", 
                            question_count: int = None, question_types: List[str] = None, 
                            difficulty: str = None) -> Dict[str, Any]:
         """生成无需文档的测验
         
         Args:
             topic: 测验主题
-            constraints: 额外约束条件
+            user_requirements: 用户的额外需求或约束
             question_count: 生成题目的数量
             question_types: 题目类型列表，可包含 'MC'(单选), 'MCM'(多选), 'TF'(判断), 'FB'(填空), 'SA'(简答)
-            difficulty: 难度级别，'easy'=简单，'medium'=中等，'hard'=困难, 'master'=极难
+            difficulty: 难度级别，'easy'=简单，'medium'=中等，'hard'=困难
             
         Returns:
             包含生成测验结果的字典
@@ -873,21 +872,30 @@ class RAGEngine:
         if not question_types:
             question_types = ['MC'] # 如果没有有效题型，默认使用单选题
         
+        # 添加system_prompt，引导LLM生成更标准的格式
+        system_prompt = """你是一个专业的教育测验出题专家。请严格按照指定格式生成测验题目。
+确保生成的JSON格式完整正确，并包含所有必要字段。
+题目应该基于主题和用户需求，内容要准确、清晰，并提供详细的解析。"""
+        
         prompt_variables = {
             'topic': topic,
-            'constraints': constraints,
+            'user_requirements': user_requirements,
             'question_count': question_count,
             'question_types': ", ".join(question_types),
             'difficulty': difficulty
         }
         
         prompt = PromptManager.render_by_type(
-            template_type='quiz_without_doc', 
+            template_type='quiz_generation', 
             variables=prompt_variables
         )
         
         # 调用LLM生成测验题目
-        response = self.llm_client.generate_text(prompt=prompt, task_type='quiz_generation')
+        response = self.llm_client.generate_text(
+            prompt=prompt, 
+            system_prompt=system_prompt,
+            task_type='quiz_generation'
+        )
         
         # 解析LLM返回的JSON格式题目，并存入数据库 (Question模型)
         try:
@@ -962,7 +970,7 @@ class RAGEngine:
                 total_questions=len(processed_quiz_data),
                 config={
                     'topic': topic,
-                    'constraints': constraints,
+                    'user_requirements': user_requirements,
                     'question_types': question_types,
                     'question_count': question_count,
                     'generated_time': time.time()
@@ -1012,7 +1020,7 @@ class RAGEngine:
             "topic": "主题名称",
             "constraints": "具体约束条件的详细描述",
             "suggested_question_types": ["MC", "TF", "MCM", "FB", "SA"],
-            "suggested_difficulty": "easy/medium/hard/master"
+            "suggested_difficulty": "easy/medium/hard"
         }
         
         只返回JSON格式，不要有其他文字。确保JSON格式正确。
@@ -1069,7 +1077,7 @@ class RAGEngine:
             conversation_history: 对话历史列表，每个元素包含 'role' 和 'content' 键
             question_count: 生成题目的数量
             question_types: 题目类型列表，可包含 'MC'(单选), 'MCM'(多选), 'TF'(判断), 'FB'(填空), 'SA'(简答)
-            difficulty: 难度级别，'easy'=简单，'medium'=中等，'hard'=困难, 'master'=极难
+            difficulty: 难度级别，'easy'=简单，'medium'=中等，'hard'=困难
             
         Returns:
             包含生成测验结果的字典
@@ -1088,7 +1096,7 @@ class RAGEngine:
         
         # 使用提取的主题和约束生成测验
         topic = constraints_data.get('topic', '未指定主题')
-        constraints = constraints_data.get('constraints', '')
+        user_requirements = constraints_data.get('constraints', '')
         
         # 如果未指定题型和难度，使用建议值
         if not question_types:
@@ -1100,7 +1108,7 @@ class RAGEngine:
         # 生成测验
         return self.generate_quiz_without_doc(
             topic=topic,
-            constraints=constraints,
+            user_requirements=user_requirements,
             question_count=question_count,
             question_types=question_types,
             difficulty=difficulty

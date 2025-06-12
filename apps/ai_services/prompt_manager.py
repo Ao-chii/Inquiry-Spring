@@ -67,14 +67,15 @@ class PromptManager:
             # 处理参考资料部分
             if '$reference_text_section' in template_content:
                 if variables.get('reference_text'):
-                    variables['reference_text_section'] = f"""参考资料:
-{variables.get('reference_text')}"""
-                    variables['reference_instruction'] = "如果参考资料中没有足够的信息来回答，请坦诚告知你无法基于给定资料回答，但可以提供一般性的建议。"
-                    variables['citation_instruction'] = "引用参考资料中的相关内容来支持你的回答"
+                    variables['reference_text_section'] = f"""参考资料:\n{variables.get('reference_text')}"""
+                    variables['reference_instruction'] = "请严格根据上面提供的参考资料来回答问题。不要使用外部知识。如果资料无法回答，请直接告知\"根据提供的资料无法回答该问题\"。"
+                    variables['citation_instruction'] = "要求：在你的回答中，如果你引用了某个来源的内容，必须在句末通过方括号标注其来源标识，例如：[Source 1]。如果一个句子综合了多个来源，请将它们都列出，例如：[Source 1, Source 2]。"
+                    variables['source_passage_instruction'] = "原文相关段落（必须提供）"
                 else:
                     variables['reference_text_section'] = ""
                     variables['reference_instruction'] = "基于你的知识提供最准确的回答。"
                     variables['citation_instruction'] = "确保回答准确且有帮助"
+                    variables['source_passage_instruction'] = "相关知识点说明（可选）"
                 
             # 使用string.Template进行渲染
             template_obj = Template(template_content)
@@ -105,7 +106,6 @@ class PromptManager:
             # 返回默认提示词
             default_templates = {
                 'quiz_generation': PromptManager.get_default_quiz_template(),
-                'quiz_without_doc': PromptManager.get_default_quiz_without_doc_template(),
                 'chat_response': PromptManager.get_default_chat_template(),
                 'chat_with_history_response': PromptManager.get_default_chat_with_history_template(),
                 'explanation': PromptManager.get_default_explanation_template(),
@@ -123,28 +123,30 @@ class PromptManager:
     
     @staticmethod
     def get_default_quiz_template() -> str:
-        # 获取默认的测验生成模板
+        # 获取默认的测验生成模板，使用RAG方式
         return """
-        你是一个专业的教育测验出题专家。请根据以下学习材料，生成高质量的测验题目。
+        你是一个专业的教育测验出题专家。请根据以下要求，生成高质量的测验题目。
 
-        学习材料:
-        $content
+        $reference_text_section
 
-        请生成 $question_count 道测验题，题型包括: $question_types。
-        难度级别: $difficulty（easy, medium, hard, master）
+        主题: $topic
+        用户需求: $user_requirements
+
+        请生成 $question_count 道关于"$topic"主题的测验题，题型包括: $question_types。
+        难度级别: $difficulty（easy, medium, hard）
 
         支持的题型说明:
         - MC: 单选题 - 提供4个选项(A,B,C,D)，只有1个正确答案
-        - MCM: 多选题 - 提供4-6个选项，有2个或更多正确答案
+        - MCM: 多选题 - 提供4个选项(A,B,C,D)，有2个或更多正确答案
         - TF: 判断题 - 判断陈述是"正确"还是"错误"
         - FB: 填空题 - 需要填写单词、短语或句子
         - SA: 简答题 - 需要学生用自己的话回答，提供关键点列表作为参考答案
 
         要求:
-        1. 每个问题都必须直接基于提供的学习材料
-        2. 问题必须明确且答案准确
-        3. 为每个问题提供详细的解析，解释为何正确答案是正确的
-        4. 答案解析应直接引用原文相关内容
+        1. 每个问题都必须与主题"$topic"相关，并遵循用户需求
+        2. $reference_instruction
+        3. 问题必须明确且答案准确
+        4. 为每个问题提供详细的解析，解释为何正确答案是正确的
         5. 按以下JSON格式返回:
 
         ```json
@@ -160,14 +162,16 @@ class PromptManager:
                                         // 填空题: "具体答案文本"
                                         // 简答题: ["关键点1", "关键点2", ...]
             "explanation": "详细解析",
-            "source_passage": "原文相关段落",
-            "difficulty": "medium" // 难度：easy, medium, hard, master
+            "source_passage": "$source_passage_instruction",
+            "difficulty": "medium", // 难度：easy, medium, hard
+            "knowledge_points": ["知识点1", "知识点2"] // 题目涉及的知识点列表
         },
         // 更多题目...
         ]
         ```
 
         对于简答题，正确答案应包含评分要点（关键词或关键概念的列表）。
+        确保每个题目都有明确的知识点标签，便于学习者理解该题目考察的具体知识点。
 
         仅返回JSON格式的答案，不要有其他文字。
         """
@@ -253,12 +257,6 @@ class PromptManager:
         文档内容:
         $content
 
-        长度要求:
-        $length_requirement
-
-        格式要求:
-        $outline_requirement
-
         要求:
         1. 保留文档的核心信息和关键点
         2. 使用清晰、专业的语言
@@ -269,58 +267,6 @@ class PromptManager:
         7. 标记特别重要的内容以便阅读者关注
 
         摘要:
-        """
-    
-    @staticmethod
-    def get_default_quiz_without_doc_template() -> str:
-        # 获取默认的无文档测验生成模板
-        return """
-        你是一个专业的教育测验出题专家。请根据以下主题和要求，生成高质量的测验题目。
-
-        主题: $topic
-        
-        请生成 $question_count 道测验题，题型包括: $question_types。
-        难度级别: $difficulty（easy, medium, hard, master）
-
-        支持的题型说明:
-        - MC: 单选题 - 提供4个选项(A,B,C,D)，只有1个正确答案
-        - MCM: 多选题 - 提供4-6个选项，有2个或更多正确答案
-        - TF: 判断题 - 判断陈述是"正确"还是"错误"
-        - FB: 填空题 - 需要填写单词、短语或句子
-        - SA: 简答题 - 需要学生用自己的话回答，提供关键点列表作为参考答案
-
-        额外约束和要求:
-        $constraints
-
-        要求:
-        1. 问题必须与主题相关，且符合额外约束要求
-        2. 问题必须明确且答案准确
-        3. 为每个问题提供详细的解析，解释为何正确答案是正确的
-        4. 答案解析应引用相关知识点
-        5. 按以下JSON格式返回:
-
-        ```json
-        [
-        {
-            "content": "问题内容",
-            "type": "MC", // MC=单选题，MCM=多选题，TF=判断题，FB=填空题，SA=简答题
-            "options": ["选项A", "选项B", "选项C", "选项D"], // 选择题需要
-            "correct_answer": "正确答案", // 根据题型不同有不同格式：
-                                        // 单选题: "A"、"B"等字母
-                                        // 多选题: ["A", "C"]等字母数组
-                                        // 判断题: "正确"或"错误"
-                                        // 填空题: "具体答案文本"
-                                        // 简答题: ["关键点1", "关键点2", ...]
-            "explanation": "详细解析",
-            "difficulty": "medium" // 难度：easy, medium, hard, master
-        },
-        // 更多题目...
-        ]
-        ```
-
-        对于简答题，正确答案应包含评分要点（关键词或关键概念的列表）。
-
-        仅返回JSON格式的答案，不要有其他文字。
         """
     
     @staticmethod
@@ -339,15 +285,7 @@ class PromptManager:
                     'name': '标准测验生成',
                     'template_type': 'quiz_generation',
                     'content': PromptManager.get_default_quiz_template(),
-                    'variables': ['content', 'question_count', 'question_types', 'difficulty'],
-                    'version': '1.0',
-                    'is_active': True
-                },
-                {
-                    'name': '无文档测验生成',
-                    'template_type': 'quiz_without_doc',
-                    'content': PromptManager.get_default_quiz_without_doc_template(),
-                    'variables': ['topic', 'constraints', 'question_count', 'question_types', 'difficulty'],
+                    'variables': ['reference_text', 'topic', 'user_requirements', 'question_count', 'question_types', 'difficulty'],
                     'version': '1.0',
                     'is_active': True
                 },

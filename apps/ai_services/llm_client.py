@@ -75,7 +75,7 @@ class BaseLLMClient:
     
     def __init__(self, model_config: Optional[AIModel]):
         self.model_config = model_config
-        self.model_id = model_config.model_id if model_config else "gpt-3.5-turbo"
+        self.model_id = model_config.model_id if model_config else "gemini-2.5-flash-preview-05-20"
         self.max_tokens = model_config.max_tokens if model_config else 1000
         self.temperature = model_config.temperature if model_config else 0.7
         

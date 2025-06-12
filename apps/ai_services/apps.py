@@ -2,6 +2,8 @@ from django.apps import AppConfig
 import logging
 from django.db import connection
 from django.db.models.signals import post_migrate
+from .prompt_manager import PromptManager
+from .rag_engine import initialize_ai_services
 
 logger = logging.getLogger(__name__)
 
@@ -13,10 +15,6 @@ class AiServicesConfig(AppConfig):
     def ready(self):
         # 导入需要在应用启动时使用的模块
         # 但不立即初始化数据库对象
-        from .prompt_manager import PromptManager
-        from .llm_client import LLMClientFactory
-        from .rag_engine import initialize_ai_services
-        
         # 避免在应用加载时访问数据库
         # 我们将通过信号在第一次请求时初始化，或使用管理命令
         
@@ -51,4 +49,3 @@ class AiServicesConfig(AppConfig):
                 initialize_services()
         
         post_migrate.connect(post_migrate_callback, sender=self)
-            

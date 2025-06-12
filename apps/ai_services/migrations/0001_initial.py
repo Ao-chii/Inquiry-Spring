@@ -91,8 +91,8 @@ class Migration(migrations.Migration):
                     models.CharField(
                         choices=[
                             ("quiz_generation", "测验生成"),
-                            ("quiz_without_doc", "无文档测验生成"),
                             ("chat_response", "聊天回复"),
+                            ("chat_with_history_response", "带历史聊天回复"),
                             ("explanation", "解释生成"),
                             ("summary", "总结生成"),
                         ],
