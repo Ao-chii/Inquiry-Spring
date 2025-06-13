@@ -52,6 +52,19 @@ venv.bak/
 .specstory/
 .cursorindexingignore
 structure.txt
+<<<<<<< HEAD
+apps/__pycache__
+apps/chat/__pycache__
+apps/ai_services/__pycache__
+apps/documents/__pycache__
+apps/quiz/__pycache__
+InquirySpring/__pycache__
+.idea
+tests/
+media/
+ai_services/
+start_backend.py
+=======
 InquirySpring.code-workspace
 
 # 迁移文件（开发阶段）
@@ -88,3 +101,4 @@ FRONTEND_API_GUIDE.md
 README.md
 .gitignore
 FRONTEND_CLEANUP_SUMMARY.md
+>>>>>>> a8cbec81e8695ac4bba2c6ac122dbabeee188b7d
