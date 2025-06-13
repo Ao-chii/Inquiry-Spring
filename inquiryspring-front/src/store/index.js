@@ -7,12 +7,19 @@ export default new Vuex.Store({
   state: {
     selectedPrjId:0,
     selectedPrjName:'',
-    chatHistory: [] // 新增：全局对话历史
+    chatHistory: [], // 全局对话历史
+    user: {
+      username: '',
+      isLoggedIn: false
+    }
   },
   getters: {
     getSelectedPrjId:state=>state.selectedPrjId,
     getSelectedPrjName:state=>state.selectedPrjName,
-    getChatHistory: state => state.chatHistory // 新增getter
+    getChatHistory: state => state.chatHistory,
+    getUserInfo: state => state.user,
+    getUsername: state => state.user.username,
+    isLoggedIn: state => state.user.isLoggedIn
   },
   mutations: {
     setSelectedPrjId(state,id){
@@ -21,14 +28,22 @@ export default new Vuex.Store({
     setSelectedPrjName(state,name){
       state.selectedPrjName = name;
     },
-    setChatHistory(state, history) { // 新增mutation
+    setChatHistory(state, history) {
       state.chatHistory = history;
     },
-    addChatMessage(state, message) { // 新增mutation
+    addChatMessage(state, message) {
       state.chatHistory.push(message);
     },
-    clearChatHistory(state) { // 新增mutation
+    clearChatHistory(state) {
       state.chatHistory = [];
+    },
+    setUserInfo(state, userInfo) {
+      state.user.username = userInfo.username;
+      state.user.isLoggedIn = true;
+    },
+    clearUserInfo(state) {
+      state.user.username = '';
+      state.user.isLoggedIn = false;
     }
   },
   actions: {
@@ -38,14 +53,20 @@ export default new Vuex.Store({
     updateSelectedPrjName({commit},name){
       commit('setSelectedPrjName',name);
     },
-    updateChatHistory({commit}, history) { // 新增action
+    updateChatHistory({commit}, history) {
       commit('setChatHistory', history);
     },
-    addChatMessage({commit}, message) { // 新增action
+    addChatMessage({commit}, message) {
       commit('addChatMessage', message);
     },
-    clearChatHistory({commit}) { // 新增action
+    clearChatHistory({commit}) {
       commit('clearChatHistory');
+    },
+    updateUserInfo({commit}, userInfo) {
+      commit('setUserInfo', userInfo);
+    },
+    logout({commit}) {
+      commit('clearUserInfo');
     }
   },
   modules: {

@@ -156,14 +156,36 @@ export default {
       this.$refs.loginForm.validate(async (valid) => {
         if (valid) {
           try {
+            console.log('发送登录请求...');
             const response = await axios.post('/api/login/', this.loginForm)
+            console.log('登录响应:', response.data);
+            
             if (response.data.success) {
+              // 直接使用表单中的用户名
+              const username = this.loginForm.username;
+              console.log('使用表单用户名:', username);
+              
+              // 更新Vuex store中的用户信息
+              await this.$store.dispatch('updateUserInfo', {
+                username: username
+              });
+              
+              // 验证store是否更新成功
+              const storeUsername = this.$store.getters.getUsername;
+              console.log('Store中的用户名:', storeUsername);
+              
               this.$message.success('登录成功')
               this.$router.push('/project')
             } else {
+              console.error('登录失败:', response.data.message);
               this.$message.error(response.data.message || '登录失败')
             }
           } catch (error) {
+            console.error('登录失败:', error);
+            if (error.response) {
+              console.error('错误响应:', error.response.data);
+              console.error('状态码:', error.response.status);
+            }
             this.$message.error('登录请求失败，请稍后重试')
           }
         }
@@ -189,6 +211,9 @@ export default {
             if (response.data.success) {
               this.$message.success('注册成功')
               this.activeTab = 'login'
+              // 自动填充登录表单
+              this.loginForm.username = this.registerForm.username;
+              this.loginForm.password = this.registerForm.password;
             } else {
               this.$message.error(response.data.message || '注册失败')
             }

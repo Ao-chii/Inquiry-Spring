@@ -23,6 +23,19 @@
           <span>退出</span>
         </el-menu-item>
       </el-menu>
+
+      <!-- 用户信息展示 -->
+      <div class="user-info" style="position: fixed; bottom: 0; left: 0; width: 240px; padding: 15px; border-top: 1px solid #e0d6c2; background: #f1e9dd;">
+        <div style="display: flex; align-items: center; padding: 10px;">
+          <el-avatar :size="40" style="background: #8b7355; margin-right: 10px;">
+            {{ userInitial }}
+          </el-avatar>
+          <div>
+            <div style="color: #5a4a3a; font-weight: bold; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 150px;">{{ username }}</div>
+            <div style="color: #8b7355; font-size: 12px;">已登录</div>
+          </div>
+        </div>
+      </div>
     </el-aside>
 
     <!-- 主内容区 -->
@@ -130,6 +143,9 @@
 </template>
 
 <script>
+import { mapGetters } from 'vuex'
+import axios from 'axios'
+
 export default {
   data() {
     return {
@@ -157,6 +173,31 @@ export default {
         }
       ],
       isSubmitting: false
+    }
+  },
+  computed: {
+    ...mapGetters(['getUsername', 'isLoggedIn']),
+    username() {
+      console.log('当前store中的用户名:', this.getUsername);
+      const username = this.getUsername;
+      if (!username && this.isLoggedIn) {
+        console.warn('已登录但用户名为空');
+      }
+      return username || '未登录'
+    },
+    userInitial() {
+      const username = this.getUsername;
+      console.log('计算用户名首字母，用户名:', username);
+      return username ? username.charAt(0).toUpperCase() : '?'
+    }
+  },
+  watch: {
+    // 监听用户名变化
+    getUsername: {
+      immediate: true,
+      handler(newUsername) {
+        console.log('用户名更新:', newUsername);
+      }
     }
   },
   methods: {
@@ -209,11 +250,65 @@ export default {
       // 实际应用中这里应该跳转到项目详情页
       // this.$router.push(`/project/${project.id}`);
     },
-    // 跳转到聊天页面
-    unlog() {
-      window.alert('退出')
-      this.$router.push('/')
+    // 退出登录
+    async unlog() {
+      this.$router.push('/');
+      // try {
+      //   await axios.post('/api/logout/', {}, {
+      //     withCredentials: true,
+      //     headers: {
+      //       'Content-Type': 'application/json',
+      //     }
+      //   });
+      //   await this.$store.dispatch('logout');
+      //   this.$message.success('退出成功');
+      //   this.$router.push('/');
+      // } catch (error) {
+      //   console.error('退出失败:', error);
+      //   this.$message.error('退出失败，请重试');
+      // }
+    },
+    // 检查登录状态
+    async checkLoginStatus() {
+      console.log('检查登录状态:', this.isLoggedIn);
+      console.log('当前用户名:', this.username);
+      
+      if (!this.isLoggedIn) {
+        console.log('未登录，准备跳转到登录页');
+        this.$message.warning('请先登录');
+        this.$router.push('/');
+        return;
+      }
+      
+      // 如果已登录但没有用户名，尝试重新获取用户信息
+      if (this.isLoggedIn && !this.getUsername) {
+        console.log('已登录但无用户名，尝试获取用户信息');
+        try {
+          const response = await axios.get('/api/user/info/', {
+            withCredentials: true
+          });
+          console.log('获取用户信息响应:', response.data);
+          
+          if (response.data.success) {
+            await this.$store.dispatch('updateUserInfo', {
+              username: response.data.username
+            });
+            console.log('用户信息更新成功');
+          }
+        } catch (error) {
+          console.error('获取用户信息失败:', error);
+        }
+      }
     }
+  },
+  
+  async created() {
+    console.log('组件创建，当前登录状态:', this.isLoggedIn);
+    console.log('组件创建，当前用户名:', this.getUsername);
+    
+    // 组件创建时检查登录状态
+    await this.$nextTick();
+    await this.checkLoginStatus();
   }
 }
 </script>
@@ -250,5 +345,52 @@ export default {
 .project-card:hover {
   transform: translateY(-3px);
   box-shadow: 0 4px 12px rgba(139, 115, 85, 0.15);
+}
+
+/* 用户信息样式 */
+.user-info {
+  background: #f1e9dd;
+  box-shadow: 0 -2px 10px rgba(0,0,0,0.05);
+  z-index: 1000;
+  transition: all 0.3s ease;
+}
+
+.user-info:hover {
+  background: #e9e0d2;
+}
+
+/* 确保侧边栏内容不被用户信息遮挡 */
+.el-aside {
+  position: relative;
+  padding-bottom: 80px; /* 为用户信息区域留出空间 */
+}
+
+/* 用户名文本溢出处理 */
+.el-avatar {
+  font-size: 18px;
+  font-weight: bold;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* 主内容区域样式 */
+.el-main {
+  overflow-y: auto;
+  height: 100vh;
+}
+
+/* 设置滚动条样式 */
+.el-main::-webkit-scrollbar {
+  width: 6px;
+}
+
+.el-main::-webkit-scrollbar-thumb {
+  background-color: rgba(139, 115, 85, 0.2);
+  border-radius: 3px;
+}
+
+.el-main::-webkit-scrollbar-track {
+  background-color: transparent;
 }
 </style>
