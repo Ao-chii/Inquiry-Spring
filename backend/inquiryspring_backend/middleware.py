@@ -17,6 +17,8 @@ class APIResponseMiddleware(MiddlewareMixin):
         '/api/summarize/',
         '/api/chat/',
         '/api/test/',
+        '/api/login/',
+        '/api/register/',
     ]
 
     def process_response(self, request, response):

@@ -7,6 +7,7 @@ from django.conf import settings
 from django.conf.urls.static import static
 from django.http import JsonResponse
 from inquiryspring_backend.documents import views as doc_views
+from inquiryspring_backend.projects import auth as project_auth
 
 def health_check(request):
     """健康检查接口"""
@@ -19,6 +20,10 @@ def health_check(request):
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('health/', health_check, name='health'),
+    
+    # 用户认证API
+    path('api/login/', project_auth.user_login, name='api_login'),
+    path('api/register/', project_auth.user_register, name='api_register'),
     
     # API endpoints for Vue.js frontend
     path('api/chat/', include('inquiryspring_backend.chat.urls', namespace='api_chat')),
