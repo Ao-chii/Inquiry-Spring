@@ -62,7 +62,6 @@ InquirySpring/__pycache__
 .idea
 tests/
 media/
-ai_services/
 start_backend.py
 =======
 InquirySpring.code-workspace
