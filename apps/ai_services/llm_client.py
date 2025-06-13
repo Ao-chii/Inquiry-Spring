@@ -91,14 +91,20 @@ class BaseLLMClient:
         else:
             self.api_base = None
     
-    def _create_task_log(self, task_type: str, input_data: Dict) -> AITaskLog:
+    def _create_task_log(self, task_type: str, input_data: Dict, **kwargs) -> AITaskLog:
         """创建任务日志"""
-        return AITaskLog.objects.create(
-            task_type=task_type,
-            model=self.model_config,
-            input_data=input_data,
-            status='processing'
-        )
+        log_data = {
+            'task_type': task_type,
+            'model': self.model_config,
+            'input_data': input_data,
+            'status': 'processing',
+            'user': kwargs.get('user'),
+            'session_id': kwargs.get('session_id'),
+            'document': kwargs.get('document')
+        }
+        # 过滤掉None的值，避免向create方法传递空参数
+        log_data = {k: v for k, v in log_data.items() if v is not None}
+        return AITaskLog.objects.create(**log_data)
     
     def _update_task_log(self, task_log: AITaskLog, output_data: Dict, 
                         status: str, tokens_used: int, 
@@ -114,7 +120,7 @@ class BaseLLMClient:
     
     def generate_text(self, prompt: str, system_prompt: str = None, 
                     max_tokens: int = None, temperature: float = None,
-                    task_type: str = "chat") -> Dict[str, Any]:
+                    task_type: str = "chat", **kwargs) -> Dict[str, Any]:
         """
         生成文本（由子类实现）
         
@@ -124,6 +130,7 @@ class BaseLLMClient:
             max_tokens: 最大生成令牌数
             temperature: 温度参数
             task_type: 任务类型
+            **kwargs: 用于日志记录的额外上下文 (user, session_id, document)
             
         Returns:
             包含生成结果的字典
@@ -215,7 +222,7 @@ class GeminiClient(BaseLLMClient):
     
     def generate_text(self, prompt: str, system_prompt: str = None, 
                     max_tokens: int = None, temperature: float = None,
-                    task_type: str = "chat") -> Dict[str, Any]:
+                    task_type: str = "chat", **kwargs) -> Dict[str, Any]:
         """使用Gemini API生成文本"""
         if not max_tokens:
             max_tokens = self.max_tokens
@@ -233,7 +240,7 @@ class GeminiClient(BaseLLMClient):
             "max_tokens": max_tokens,
             "temperature": temperature
         }
-        task_log = self._create_task_log(task_type, input_data)
+        task_log = self._create_task_log(task_type, input_data, **kwargs)
         
         start_time = time.time()
         
@@ -422,7 +429,7 @@ class LocalModelClient(BaseLLMClient):
     
     def generate_text(self, prompt: str, system_prompt: str = None, 
                     max_tokens: int = None, temperature: float = None,
-                    task_type: str = "chat") -> Dict[str, Any]:
+                    task_type: str = "chat", **kwargs) -> Dict[str, Any]:
         """使用本地模型生成文本"""
         if not max_tokens:
             max_tokens = self.max_tokens
@@ -437,7 +444,7 @@ class LocalModelClient(BaseLLMClient):
             "max_tokens": max_tokens,
             "temperature": temperature
         }
-        task_log = self._create_task_log(task_type, input_data)
+        task_log = self._create_task_log(task_type, input_data, **kwargs)
         
         start_time = time.time()
         

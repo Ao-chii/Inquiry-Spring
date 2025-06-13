@@ -1,4 +1,5 @@
 from django.db import models
+from django.conf import settings
 
 
 class AIModel(models.Model):
@@ -37,7 +38,9 @@ class AIModel(models.Model):
     def save(self, *args, **kwargs):
         # 确保只有一个默认模型
         if self.is_default:
+            # 首先将所有模型的is_default字段设置为False
             AIModel.objects.filter(is_default=True).update(is_default=False)
+            # 然后在保存当前实例时，由于self.is_default=True，它将被保存为默认值
         super().save(*args, **kwargs)
 
 
@@ -45,11 +48,9 @@ class PromptTemplate(models.Model):
     """提示词模板"""
     
     TEMPLATE_TYPES = [
-        ('quiz_generation', '测验生成'),
-        ('chat_response', '聊天回复'),
-        ('chat_with_history_response', '带历史聊天回复'),
-        ('explanation', '解释生成'),
-        ('summary', '总结生成'),
+        ('quiz', '测验生成'),
+        ('chat', '智能对话'), 
+        ('summary', '文档总结')
     ]
     
     name = models.CharField('模板名称', max_length=100)
@@ -77,10 +78,9 @@ class AITaskLog(models.Model):
     """AI任务日志"""
     
     TASK_TYPES = [
-        ('quiz_generation', '测验生成'),
-        ('chat', '聊天对话'),
-        ('summary', '文档总结'),
-        ('explanation', '解释生成'),
+        ('quiz', '测验生成'),
+        ('chat', '智能对话'),
+        ('summary', '文档总结')
     ]
     
     STATUS_CHOICES = [
@@ -90,6 +90,23 @@ class AITaskLog(models.Model):
         ('failed', '失败'),
     ]
     
+    # 关联与追溯字段
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        verbose_name='关联用户'
+    )
+    session_id = models.CharField('会话ID', max_length=100, blank=True, db_index=True, help_text="用于追踪匿名用户的会话")
+    document = models.ForeignKey(
+        'documents.Document',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        verbose_name='关联文档'
+    )
+
     task_type = models.CharField('任务类型', max_length=20, choices=TASK_TYPES)
     model = models.ForeignKey(AIModel, on_delete=models.SET_NULL, null=True, verbose_name='使用模型')
     
