@@ -32,7 +32,7 @@
     export default {
         methods: {
             toMainPage() {
-                this.$router.push('/project')
+                this.$router.push('/login')
             }
         }
     }

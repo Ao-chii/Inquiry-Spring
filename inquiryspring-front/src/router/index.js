@@ -34,6 +34,11 @@ const routes = [
     name:'project',
     component: () => import('../views/guidePage/createProject.vue')
   },
+  {
+    path:'/login',
+    name:'login',
+    component: () => import('../views/guidePage/loginPage.vue')
+  },
 
   {
     path: '/about',
