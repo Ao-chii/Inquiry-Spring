@@ -2,6 +2,8 @@ import logging
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from rest_framework import status
+from rest_framework.decorators import permission_classes
+from rest_framework.permissions import IsAuthenticated
 from django.shortcuts import get_object_or_404
 
 from .models import Project, ProjectDocument, ProjectStats
@@ -179,6 +181,7 @@ def project_detail(request, project_id):
 
 
 @api_view(['POST'])
+@permission_classes([IsAuthenticated])
 def project_add_document(request, project_id):
     """向项目添加文档"""
     try:

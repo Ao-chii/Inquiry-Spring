@@ -44,6 +44,10 @@ export default new Vuex.Store({
     clearUserInfo(state) {
       state.user.username = '';
       state.user.isLoggedIn = false;
+    },
+    SET_CURRENT_PROJECT(state, project) {
+      state.selectedPrjId = project.id;
+      state.selectedPrjName = project.name;
     }
   },
   actions: {
@@ -67,6 +71,9 @@ export default new Vuex.Store({
     },
     logout({commit}) {
       commit('clearUserInfo');
+    },
+    setCurrentProject({commit}, project) {
+      commit('SET_CURRENT_PROJECT', project);
     }
   },
   modules: {

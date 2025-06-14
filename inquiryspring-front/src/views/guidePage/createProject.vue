@@ -70,7 +70,7 @@
             </el-form-item>
 
             <!-- 文件上传区域 -->
-            <el-form-item label="上传资料">
+            <!-- <el-form-item label="上传资料">
               <el-tooltip content="上传相关文件作为学习项目的知识库" placement="right">
                 <i class="el-icon-question" style="color: #8b7355; font-size: 16px;"></i>
               </el-tooltip>
@@ -86,7 +86,7 @@
                 <div class="el-upload__text" style="color: #5a4a3a;">将文件拖到此处，或<em style="color: #8b7355;">点击上传</em></div>
                 <div class="el-upload__tip" slot="tip" style="color: #8b7355;">支持word/pdf/txt格式</div>
               </el-upload>
-            </el-form-item>
+            </el-form-item> -->
 
             <!-- 提交按钮 -->
             <el-form-item>
@@ -101,6 +101,78 @@
           </el-form>
         </div>
 
+        <!-- 文档管理对话框 -->
+        <el-dialog 
+          title="项目管理"
+          :visible.sync="manageDialogVisible" 
+          width="70%"
+          custom-class="project-manage-dialog"
+          :close-on-click-modal="false">
+          <div class="dialog-content">
+            <div class="project-info" style="background: #f9f5ee; padding: 20px; border-radius: 8px; margin-bottom: 10px; display: flex; align-items: center; gap: 20px;">
+              <h3 style="color: #5a4a3a; margin: 0;">{{ currentProject.name }}</h3>
+              <p style="color: #8b7355; margin: 0;">{{ currentProject.description }}</p>
+            </div>
+            
+            <div class="upload-section" style="background: #f9f5ee; padding: 20px; border-radius: 8px; margin-bottom: 10px;">
+              <h3 style="color: #5a4a3a; margin-bottom: 15px; border-bottom: 1px solid #e0d6c2; padding-bottom: 10px;">上传新文档</h3>
+              <el-upload
+                class="upload-demo"
+                drag
+                :action="getUploadUrl()"
+                multiple
+                :on-success="handleUploadSuccess"
+                :before-upload="beforeUpload"
+                style="width: 100%;">
+                <i class="el-icon-upload" style="color: #8b7355; font-size: 48px;"></i>
+                <div class="el-upload__text" style="color: #5a4a3a;">将文件拖到此处，或<em style="color: #8b7355;">点击上传</em></div>
+                <div class="el-upload__tip" slot="tip" style="color: #8b7355;">支持word/pdf/txt格式</div>
+              </el-upload>
+            </div>
+            
+            <div class="documents-section" style="background: #f9f5ee; padding: 20px; border-radius: 8px;">
+              <h3 style="color: #5a4a3a; margin-bottom: 15px; border-bottom: 1px solid #e0d6c2; padding-bottom: 10px;">当前项目文档</h3>
+              <el-table
+                :data="currentProject ? currentProject.documents : []"
+                style="width: 100%"
+                empty-text="暂无文档">
+                <el-table-column
+                  prop="name"
+                  label="文档名称"
+                  width="180">
+                </el-table-column>
+                <el-table-column
+                  prop="size"
+                  label="大小"
+                  width="120">
+                </el-table-column>
+                <el-table-column
+                  prop="uploadTime"
+                  label="上传时间"
+                  width="180">
+                </el-table-column>
+                <el-table-column
+                  label="操作"
+                  width="120">
+                  <template #default="scope">
+                    <el-button 
+                      @click="deleteDocument(scope.row)" 
+                      type="text" 
+                      style="color: #f56c6c;">
+                      删除
+                    </el-button>
+                  </template>
+                </el-table-column>
+              </el-table>
+            </div>
+          </div>
+          
+          <span slot="footer" class="dialog-footer">
+            <el-button @click="manageDialogVisible = false" style="color: #5a4a3a;">取消</el-button>
+            <el-button type="primary" @click="manageDialogVisible = false" style="background: #8b7355; border: none;">确定</el-button>
+          </span>
+        </el-dialog>
+        
         <!-- 项目列表展示 -->
         <div class="project-list" style="background: white; padding: 30px; border-radius: 12px; box-shadow: 0 2px 12px rgba(0,0,0,0.05);">
           <h2 style="color: #5a4a3a; margin-bottom: 20px;">我的学习项目</h2>
@@ -125,13 +197,19 @@
             </el-table-column>
             <el-table-column
               label="操作"
-              width="120">
+              width="180">
               <template #default="scope">
                 <el-button 
                   @click="openProject(scope.row)" 
                   type="text" 
                   style="color: #8b7355;">
                   打开
+                </el-button>
+                <el-button 
+                  @click="showManageDialog(scope.row)" 
+                  type="text" 
+                  style="color: #8b7355;">
+                  管理
                 </el-button>
               </template>
             </el-table-column>
@@ -150,6 +228,13 @@ export default {
   data() {
     return {
       uploadUrl:this.HOST+'/fileUpload/',
+      // 文档管理对话框状态
+      manageDialogVisible: false,
+      currentProject: {
+        id: null,
+        name: '',
+        description: ''
+      },
       // 项目表单数据
       projectForm: {
         name: '',
@@ -242,8 +327,7 @@ export default {
     // 打开项目
     openProject(row) {
       //将当前项目状态信息存入store
-      this.$store.dispatch('updateSelectedPrjId', row.id);
-      this.$store.dispatch('updateSelectedPrjName', row.name);
+      this.$store.dispatch('setCurrentProject', row);
 
       this.$message.info(`打开项目: ${row.name}`);
       this.$router.push({ path: '/chat', query: { id: row.id } });
@@ -268,6 +352,18 @@ export default {
       //   this.$message.error('退出失败，请重试');
       // }
     },
+    // 显示文档管理对话框
+    showManageDialog(project) {
+      this.currentProject = project;
+      this.$store.dispatch('setCurrentProject', project);
+      this.manageDialogVisible = true;
+    },
+    
+    // 获取上传URL
+    getUploadUrl() {
+      return this.HOST + '/projects/' + (this.currentProject?.id || '') + '/documents/';
+    },
+    
     // 检查登录状态
     async checkLoginStatus() {
       console.log('检查登录状态:', this.isLoggedIn);
@@ -314,6 +410,15 @@ export default {
 </script>
 
 <style scoped>
+.project-manage-dialog {
+  border-radius: 12px !important;
+}
+
+.dialog-content {
+  max-height: 70vh;
+  overflow-y: auto;
+  padding: 10px;
+}
 /* 使用与chatPage一致的样式 */
 .el-menu-item {
   transition: all 0.3s ease;
