@@ -10,7 +10,7 @@ from rest_framework.response import Response
 from rest_framework import status
 
 from .models import Quiz, Question, QuizAttempt, Answer
-from ..ai_service_wrapper import ai_service
+from ..ai_services.rag_engine import RAGEngine
 from ..documents.models import Document
 
 logger = logging.getLogger(__name__)
@@ -64,12 +64,16 @@ class TestGenerationView(View):
                 is_processed=True
             ).order_by('-uploaded_at').first()
 
+            # 创建RAG引擎实例
+            rag_engine = RAGEngine()
+
             if recent_document and recent_document.content:
                 # 基于文档内容生成测验
                 logger.info(f"基于文档生成测验: {recent_document.title}")
-                quiz_result = ai_service.generate_quiz(
-                    content=recent_document.content,
-                    topic=f"基于文档《{recent_document.title}》",
+                user_query = f"基于文档《{recent_document.title}》生成{question_count}道{difficulty}难度的测验题目"
+                quiz_result = rag_engine.handle_quiz(
+                    user_query=user_query,
+                    document_id=recent_document.id,
                     question_count=question_count,
                     question_types=question_types,
                     difficulty=difficulty
@@ -77,8 +81,9 @@ class TestGenerationView(View):
             else:
                 # 没有文档时使用主题生成
                 logger.info("没有可用文档，基于主题生成测验")
-                quiz_result = ai_service.generate_quiz(
-                    topic=topic or "通用知识",
+                user_query = f"生成关于{topic or '通用知识'}的{question_count}道{difficulty}难度的测验题目"
+                quiz_result = rag_engine.handle_quiz(
+                    user_query=user_query,
                     question_count=question_count,
                     question_types=question_types,
                     difficulty=difficulty
@@ -86,17 +91,17 @@ class TestGenerationView(View):
             
             if "error" in quiz_result:
                 return JsonResponse({'error': quiz_result["error"]}, status=500)
-            
-            # 解析生成的题目
-            questions = quiz_result.get("questions", [])
-            
+
+            # 解析生成的题目 - RAGEngine返回的是quiz_data
+            quiz_data = quiz_result.get("quiz_data", [])
+
             # 格式化为前端期望的格式
             formatted_questions = []
-            for i, q in enumerate(questions):
+            for i, q in enumerate(quiz_data):
                 formatted_q = {
                     'id': i + 1,
-                    'question': q.get('question', ''),
-                    'type': q.get('type', 'MC'),
+                    'question': q.get('question_text', q.get('question', '')),
+                    'type': q.get('question_type', q.get('type', 'MC')),
                     'options': q.get('options', []),
                     'correct_answer': q.get('correct_answer', ''),
                     'explanation': q.get('explanation', '')

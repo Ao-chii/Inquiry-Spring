@@ -65,17 +65,13 @@
                         <div class="message-content" v-html="markdownToHtml(message.text)"></div>
                         <div class="message-time">{{ formatTime(message.timestamp) }}</div>
                     </div>
-                    <!-- AI动画气泡 -->
-                    <div v-if="aiTyping" class="message-bubble ai-message">
+                    <!-- AI处理中提示 -->
+                    <div v-if="isWaitingForAI" class="message-bubble ai-message">
                         <div class="message-content">
-                            <template v-if="aiTypingLines.length > 0">
-                                <div v-html="aiTypingHtml"></div>
-                            </template>
-                            <template v-else>
-                                <span class="ai-loading">
-                                    <span class="dot"></span><span class="dot"></span><span class="dot"></span>
-                                </span>
-                            </template>
+                            <span class="ai-loading">
+                                <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+                            </span>
+                            <span style="margin-left: 10px;">正在思考中...</span>
                         </div>
                         <div class="message-time">问泉</div>
                     </div>
@@ -265,16 +261,7 @@
         transform: scale(0.98);
     }
 
-    .typing-cursor {
-      display: inline-block;
-      width: 1ch;
-      animation: blink 1s steps(1) infinite;
-      color: #8b7355;
-    }
-    @keyframes blink {
-      0%, 50% { opacity: 1; }
-      51%, 100% { opacity: 0; }
-    }
+    /* 删除了打字动画相关的CSS */
 
     .ai-loading {
       display: inline-block;
@@ -361,13 +348,9 @@ export default {
                 message: '',
                 timestamp: ''
             },
-            aiTyping: false,
-            aiDisplayLines: [], // AI动画用
-            aiCurrentLineText: '',
-            aiTypingTimer: null,
-            aiTypingLineIdx: 0,
-            aiTypingCharIdx: 0,
-            aiTypingLines: [],
+            isWaitingForAI: false,
+            currentSessionId: null,
+            pollingTimer: null,
             selectedFile: null,
             selectedFileName: '', // 新增：存储选中文件名
             currentDocumentId: null, // 当前文档ID
@@ -402,14 +385,13 @@ export default {
             if (container) container.scrollTop = container.scrollHeight;
         });
     },
+
+    beforeDestroy() {
+        // 组件销毁前清理轮询
+        this.stopPolling();
+    },
     computed: {
-        aiTypingHtml() {
-            let arr = this.aiDisplayLines.slice();
-            if (this.aiCurrentLineText) {
-                arr.push(this.aiCurrentLineText + '<span class="typing-cursor">|</span>');
-            }
-            return this.markdownToHtml(arr.join('\n'));
-        },
+        // 删除了动画相关的computed属性
     },
     watch: {
         messages: {
@@ -448,8 +430,10 @@ export default {
         },
         sendMessage() {
             if (this.inputMessage.trim() === '') return;
+
             this.form.message = this.inputMessage;
             this.form.timestamp = new Date();
+
             // 添加用户消息
             const userMsg = {
                 text: this.inputMessage,
@@ -457,93 +441,95 @@ export default {
                 timestamp: this.form.timestamp
             };
             this.messages.push(userMsg);
+
             // 同步到store
             this.$store.dispatch('addChatMessage', {
                 ...userMsg,
                 timestamp: userMsg.timestamp.toISOString()
             });
+
             this.inputMessage = '';
             this.$nextTick(() => {
                 const container = document.querySelector('.message-list');
                 if (container) container.scrollTop = container.scrollHeight;
             });
+
+            // 显示等待状态
+            this.isWaitingForAI = true;
+
             // 发送消息到后端API
             axios.post(this.url, this.form).then((response) => {
                 console.log('消息发送成功:', response.data);
-                // 不直接push AI消息，走动画
+
+                if (response.data.session_id) {
+                    this.currentSessionId = response.data.session_id;
+                    // 开始轮询检查状态
+                    this.startPolling();
+                } else {
+                    this.isWaitingForAI = false;
+                    this.$message.error('未获取到会话ID');
+                }
             })
             .catch(error => {
                 console.error('发送失败:', error);
                 this.$message.error('发送失败：' + error.message);
-                this.aiTyping = false; // 发送失败时停止AI动画
+                this.isWaitingForAI = false;
             });
-            // 显示AI加载动画
-            this.aiTyping = true;
-            this.aiDisplayLines = [];
-            this.aiCurrentLineText = '';
-            this.aiTypingLineIdx = 0;
-            this.aiTypingCharIdx = 0;
-            this.aiTypingLines = [];
-            // 获取AI回复（减少延迟时间）
-            setTimeout(() => {
-                axios.get(this.url).then(response => {
-                    console.log('AI回复数据:', response.data); // 调试日志
-                    const aiMessage = response.data.ai_response || response.data.AIMessage || 'AI未返回内容';
-                    this.startAiTypingAnimation(aiMessage);
+        },
+        startPolling() {
+            if (this.pollingTimer) {
+                clearInterval(this.pollingTimer);
+            }
+
+            this.pollingTimer = setInterval(() => {
+                this.checkMessageStatus();
+            }, 1000); // 每秒检查一次
+        },
+
+        checkMessageStatus() {
+            if (!this.currentSessionId) return;
+
+            axios.get(`${this.HOST}/chat/status/${this.currentSessionId}/`)
+                .then(response => {
+                    console.log('状态检查:', response.data);
+
+                    if (response.data.is_ready) {
+                        // 消息已完成
+                        this.stopPolling();
+                        this.isWaitingForAI = false;
+
+                        // 添加AI回复到消息列表
+                        const aiMsg = {
+                            text: response.data.ai_response,
+                            isUser: false,
+                            timestamp: new Date()
+                        };
+                        this.messages.push(aiMsg);
+
+                        // 同步到store
+                        this.$store.dispatch('addChatMessage', {
+                            ...aiMsg,
+                            timestamp: aiMsg.timestamp.toISOString()
+                        });
+
+                        this.$nextTick(() => {
+                            const container = document.querySelector('.message-list');
+                            if (container) container.scrollTop = container.scrollHeight;
+                        });
+
+                        this.currentSessionId = null;
+                    }
                 })
                 .catch(error => {
-                    console.error('获取AI回复失败:', error); // 调试日志
-                    this.$message.error('获取AI回复失败:' + error.message);
-                    this.aiTyping = false;
+                    console.error('状态检查失败:', error);
+                    // 继续轮询，不中断
                 });
-            }, 10000); // 从20秒减少到1秒
         },
-        startAiTypingAnimation(aiText) {
-            if (this.aiTypingTimer) {
-                clearTimeout(this.aiTypingTimer);
-                this.aiTypingTimer = null;
-            }
-            this.aiTyping = true;
-            this.aiDisplayLines = [];
-            this.aiCurrentLineText = '';
-            this.aiTypingLineIdx = 0;
-            this.aiTypingCharIdx = 0;
-            this.aiTypingLines = aiText.split(/\r?\n/);
-            this.typeAiNextChar();
-        },
-        typeAiNextChar() {
-            if (this.aiTypingLineIdx >= this.aiTypingLines.length) {
-                this.aiCurrentLineText = '';
-                this.aiTyping = false;
-                // 动画结束后将AI消息push到messages
-                const aiMsg = {
-                    text: this.aiTypingLines.join('\n'),
-                    isUser: false,
-                    timestamp: new Date()
-                };
-                this.messages.push(aiMsg);
-                // 同步到store
-                this.$store.dispatch('addChatMessage', {
-                    ...aiMsg,
-                    timestamp: aiMsg.timestamp.toISOString()
-                });
-                this.$nextTick(() => {
-                    const container = document.querySelector('.message-list');
-                    if (container) container.scrollTop = container.scrollHeight;
-                });
-                return;
-            }
-            const line = this.aiTypingLines[this.aiTypingLineIdx];
-            if (this.aiTypingCharIdx < line.length) {
-                this.aiCurrentLineText += line[this.aiTypingCharIdx];
-                this.aiTypingCharIdx++;
-                this.aiTypingTimer = setTimeout(this.typeAiNextChar, 28);
-            } else {
-                this.aiDisplayLines.push(this.aiCurrentLineText);
-                this.aiCurrentLineText = '';
-                this.aiTypingLineIdx++;
-                this.aiTypingCharIdx = 0;
-                this.aiTypingTimer = setTimeout(this.typeAiNextChar, 180);
+
+        stopPolling() {
+            if (this.pollingTimer) {
+                clearInterval(this.pollingTimer);
+                this.pollingTimer = null;
             }
         },
         formatTime(date) {
