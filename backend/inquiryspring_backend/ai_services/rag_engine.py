@@ -24,6 +24,7 @@ from .llm_client import LLMClientFactory
 from .prompt_manager import PromptManager
 from inquiryspring_backend.quiz.models import Quiz, Question
 from django.conf import settings
+from .structured_output import StructuredOutputProcessor, ChatResponse, Quiz as QuizModel, SummaryResponse
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +62,7 @@ logger.info("Jieba分词器已初始化用于BM25。")
 
 class RAGEngine:
     """
-    RAG引擎，通过“召回-重排”混合检索和LLM提供三种核心AI服务：
+    RAG引擎，通过"召回-重排"混合检索和LLM提供三种核心AI服务：
     1. 聊天 (Chat): 支持有/无文档上下文的对话。
     2. 测验 (Quiz): 支持有/无文档上下文的测验生成。
     3. 摘要 (Summary): 为指定文档生成摘要。
@@ -72,6 +73,8 @@ class RAGEngine:
         'ensemble_weights': [0.5, 0.5], # 混合检索权重 [BM25, Vector]
         'vector_store_dir': VECTOR_STORE_DIR, 'default_question_count': 5,
         'default_question_types': ['MC', 'TF'], 'default_difficulty': 'medium',
+        'structured_output': True,  # 是否使用结构化输出处理
+        'max_retries': 2,          # 结构化输出失败时的最大重试次数
     }
     
     def __init__(self, document_id: int = None, llm_client = None, config: Dict = None):
@@ -86,6 +89,15 @@ class RAGEngine:
         self.llm_client = llm_client or LLMClientFactory.create_client()
         # 使用全局单例嵌入模型
         self.embeddings = _GLOBAL_EMBEDDINGS
+        
+        # 初始化结构化输出处理器
+        if self.config.get('structured_output', True):
+            self.output_processor = StructuredOutputProcessor(
+                max_retries=self.config.get('max_retries', 2),
+                retry_delay=self.config.get('retry_delay', 1)
+            )
+        else:
+            self.output_processor = None
         
         if self.document and self.document.is_processed:
             self._initialize_retrievers()
@@ -105,6 +117,9 @@ class RAGEngine:
         log_context = {'user': user, 'session_id': session_id, 'document': self.document}
         prompt_vars = {'query': query, 'conversation_history': self._format_conversation_history(history)}
         retrieved_chunks, has_doc_context = [], False
+        
+        # 获取聊天示例
+        chat_examples = PromptManager._get_or_create_examples('chat')
 
         if self.document:
             retrieved_chunks = self.retrieve_relevant_chunks(query)
@@ -114,18 +129,58 @@ class RAGEngine:
                 prompt_vars['chunk_ids'] = [c.id for c in retrieved_chunks]
                 prompt_vars['chunk_positions'] = [f"第{c.chunk_index+1}段" for c in retrieved_chunks]
 
-        prompt = PromptManager.render_by_type('chat', prompt_vars)
+        # 使用支持JSON Schema的提示词渲染
+        prompt = PromptManager.render_with_schema(
+            'chat', 
+            prompt_vars, 
+            output_schema=ChatResponse,
+            examples=chat_examples
+        )
+            
         system_prompt = "你是一个学习助手。请基于参考资料回答问题。" if has_doc_context else "你是一个学习助手。请清晰地回答问题。"
             
         llm_response = self.llm_client.generate_text(prompt=prompt, system_prompt=system_prompt, task_type="chat", **log_context)
         
-        return {
-            'answer': llm_response.get('text', '无法生成回答'),
-            'sources': [{'id': c.id, 'content': c.content} for c in retrieved_chunks],
-            'processing_time': time.time() - start_time,
-            'is_generic_answer': not has_doc_context,
-            'error': llm_response.get('error')
-        }
+        # 使用结构化输出处理
+        if self.output_processor and self.config.get('structured_output', True):
+            try:
+                validated_response = self.output_processor.validate_and_fix(
+                    llm_response.get('text', ''), 
+                    ChatResponse, 
+                    self.llm_client,
+                    task_type="chat_fix",
+                    **log_context
+                )
+                
+                # 返回验证后的结构化结果
+                result = {
+                    'answer': validated_response.answer,
+                    'sources': validated_response.sources if validated_response.sources else [],
+                    'processing_time': time.time() - start_time,
+                    'is_generic_answer': not has_doc_context,
+                    'error': llm_response.get('error')
+                }
+            except ValueError as e:
+                logger.warning(f"结构化输出验证失败: {str(e)}，回退到非结构化输出")
+                # 回退到非结构化输出处理
+                result = {
+                    'answer': llm_response.get('text', '无法生成回答'),
+                    'sources': [{'id': c.id, 'content': c.content} for c in retrieved_chunks],
+                    'processing_time': time.time() - start_time,
+                    'is_generic_answer': not has_doc_context,
+                    'error': llm_response.get('error') or str(e)
+                }
+        else:
+            # 原始非结构化输出处理
+            result = {
+                'answer': llm_response.get('text', '无法生成回答'),
+                'sources': [{'id': c.id, 'content': c.content} for c in retrieved_chunks],
+                'processing_time': time.time() - start_time,
+                'is_generic_answer': not has_doc_context,
+                'error': llm_response.get('error')
+            }
+            
+        return result
 
     def handle_quiz(self, user_query: str, document_id: int = None, 
                     question_count: int = None, question_types: List[str] = None, difficulty: str = None, 
@@ -161,11 +216,36 @@ class RAGEngine:
             try: doc_content = self.document.file.read().decode('utf-8')
             except Exception: pass
         
-        prompt = PromptManager.render_by_type('summary', {'content': doc_content})
+        # 使用支持JSON Schema的提示词渲染
+        summary_examples = PromptManager._get_or_create_examples('summary')
+        prompt = PromptManager.render_with_schema(
+            'summary',
+            {'content': doc_content}, 
+            output_schema=SummaryResponse,
+            examples=summary_examples
+        )
         system_prompt = "你是一个专业的文档分析和总结专家。"
         log_context = {'user': user, 'session_id': session_id, 'document': self.document}
         
         response = self.llm_client.generate_text(prompt=prompt, system_prompt=system_prompt, task_type='summary', **log_context)
+        
+        # 使用结构化输出处理
+        if self.output_processor and self.config.get('structured_output', True):
+            try:
+                validated_response = self.output_processor.validate_and_fix(
+                    response.get('text', ''), 
+                    SummaryResponse, 
+                    self.llm_client,
+                    task_type="summary_fix",
+                    **log_context
+                )
+                
+                # 更新响应结果
+                response['text'] = validated_response.summary
+            except ValueError as e:
+                logger.warning(f"摘要结构化输出验证失败: {str(e)}，保留原始输出")
+                # 原始输出保持不变
+        
         response['document_id'] = self.document.id
         return response
 
@@ -295,7 +375,7 @@ class RAGEngine:
         response = self.llm_client.generate_text(prompt=user_query, system_prompt=system_prompt, task_type='quiz')
         try:
             # 解析响应并确保它是一个字典
-            parsed_result = self._parse_json_from_response(response.get("text", "{}"))
+            parsed_result = self.output_processor._extract_and_parse_json(response.get("text", "{}"))
             
             # 如果解析结果不是字典（例如是列表或其他类型），返回默认字典
             if not isinstance(parsed_result, dict):
@@ -318,15 +398,43 @@ class RAGEngine:
         return self._call_quiz_llm(**kwargs)
 
     def _call_quiz_llm(self, **kwargs) -> Dict[str, Any]:
-        prompt = PromptManager.render_by_type('quiz', kwargs)
-        system_prompt = "你是一个测验出题专家。请严格按照JSON格式生成题目。"
+        # 使用支持JSON Schema的提示词渲染
+        quiz_examples = PromptManager._get_or_create_examples('quiz')
+        prompt = PromptManager.render_with_schema(
+            'quiz', 
+            kwargs,
+            output_schema=QuizModel,
+            examples=quiz_examples
+        )
+        system_prompt = "你是一个测验出题专家。请严格按照JSON Schema格式生成题目。"
         log_context = {'user': kwargs.get('user'), 'session_id': kwargs.get('session_id'), 'document': self.document}
         response = self.llm_client.generate_text(prompt, system_prompt=system_prompt, task_type='quiz', **log_context)
-        return self._process_quiz_response(response, kwargs.get('topic'), kwargs.get('difficulty'))
+        
+        if self.output_processor and self.config.get('structured_output', True):
+            try:
+                # 使用结构化输出处理
+                validated_response = self.output_processor.validate_and_fix(
+                    response.get('text', ''), 
+                    QuizModel, 
+                    self.llm_client,
+                    task_type="quiz_fix",
+                    **log_context
+                )
+                
+                # 更新响应，使用验证过的问题列表
+                quiz_data = [q.model_dump() for q in validated_response.questions]
+                return self._process_quiz_response({'text': json.dumps(quiz_data)}, kwargs.get('topic'), kwargs.get('difficulty'))
+            except ValueError as e:
+                logger.warning(f"测验结构化输出验证失败: {str(e)}，回退到传统处理")
+                # 回退到传统处理方式
+                return self._process_quiz_response(response, kwargs.get('topic'), kwargs.get('difficulty'))
+        else:
+            # 传统处理方式
+            return self._process_quiz_response(response, kwargs.get('topic'), kwargs.get('difficulty'))
 
     def _process_quiz_response(self, response: Dict, topic: str, difficulty: str) -> Dict:
         try:
-            quiz_data = self._parse_json_from_response(response.get("text", "[]"))
+            quiz_data = self.output_processor._extract_and_parse_json(response.get("text", "[]"))
             quiz_title = f"{self.document.title} - {topic}" if self.document else topic
             quiz_obj = Quiz.objects.create(document=self.document, title=quiz_title, difficulty_level=difficulty, total_questions=len(quiz_data))
             for i, q_data in enumerate(quiz_data):
@@ -340,38 +448,6 @@ class RAGEngine:
             logger.error(f"处理测验数据失败: {e}")
             response.update({'error': "解析或保存测验失败", 'quiz_data': []})
         return response
-
-    def _parse_json_from_response(self, text: str) -> Any:
-        """解析LLM响应中的JSON，处理各种格式和注释"""
-        # 首先尝试从Markdown代码块中提取JSON
-        match = re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', text)
-        json_str = match.group(1) if match else text
-        
-        # 移除JSON注释 (// 和 /* */ 形式的注释)
-        json_str = re.sub(r'//.*?$', '', json_str, flags=re.MULTILINE)  # 移除单行注释
-        json_str = re.sub(r'/\*.*?\*/', '', json_str, flags=re.DOTALL)  # 移除多行注释
-        
-        # 处理尾随逗号
-        json_str = re.sub(r',(\s*[\]}])', r'\1', json_str)
-        
-        try:
-            return json.loads(json_str)
-        except json.JSONDecodeError as e:
-            logger.warning(f"JSON解析失败: {e}, 尝试进一步清理")
-            # 进一步尝试清理，移除可能导致问题的所有非标准JSON内容
-            # 移除所有注释形式的行
-            clean_lines = []
-            for line in json_str.split('\n'):
-                if not re.search(r'^\s*//|^\s*/\*|\*/', line):
-                    clean_lines.append(line)
-            clean_json = '\n'.join(clean_lines)
-            
-            try:
-                return json.loads(clean_json)
-            except json.JSONDecodeError:
-                # 如果仍然失败，返回空列表或空字典
-                logger.error(f"JSON解析彻底失败，返回空结果")
-                return [] if json_str.strip().startswith('[') else {}
 
     def _format_conversation_history(self, history: List[Dict[str, Any]]) -> str:
         return "\n\n".join([f"{'用户' if m.get('is_user') else '助手'}: {m.get('content')}" for m in history])
