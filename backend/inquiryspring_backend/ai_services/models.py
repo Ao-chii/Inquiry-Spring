@@ -17,7 +17,7 @@ class AIModel(models.Model):
     api_base = models.URLField('API基础URL', blank=True)
     
     # 模型参数
-    max_tokens = models.PositiveIntegerField('最大令牌数', default=1000)
+    max_tokens = models.PositiveIntegerField('最大令牌数', default=10000)
     temperature = models.FloatField('温度参数', default=0.7)
     
     # 状态

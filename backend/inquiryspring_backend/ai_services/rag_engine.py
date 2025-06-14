@@ -9,6 +9,16 @@ from typing import List, Dict, Any, Optional
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
+from langchain.retrievers import BM25Retriever, EnsembleRetriever, ContextualCompressionRetriever
+from langchain_community.document_compressors import CrossEncoderReranker
+from langchain.schema import Document as LangchainDocument # Alias to avoid confusion
+
+# Model imports for reranking
+from sentence_transformers import CrossEncoder
+
+# Chinese tokenization for BM25
+import jieba
+
 from inquiryspring_backend.documents.models import Document, DocumentChunk
 from .llm_client import LLMClientFactory
 from .prompt_manager import PromptManager
@@ -20,22 +30,53 @@ logger = logging.getLogger(__name__)
 VECTOR_STORE_DIR = os.path.join(settings.BASE_DIR, "vector_store")
 os.makedirs(VECTOR_STORE_DIR, exist_ok=True)
 
+
+# ---- 全局嵌入模型单例 ----
+# 默认使用 BAAI/bge-m3，如需切换请设置环境变量 EMBEDDING_MODEL_NAME
+EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME", "BAAI/bge-m3")
+try:
+    # 使用 HuggingFaceEmbeddings 包装 SentenceTransformer 模型，使其兼容 LangChain
+    _GLOBAL_EMBEDDINGS = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL_NAME)
+    logger.info(f"已加载全局嵌入模型: {EMBEDDING_MODEL_NAME}")
+except Exception as e:
+    logger.warning(f"加载嵌入模型 {EMBEDDING_MODEL_NAME} 失败: {e}，回退到 'sentence-transformers/all-mpnet-base-v2'")
+    _GLOBAL_EMBEDDINGS = HuggingFaceEmbeddings(model_name="sentence-transformers/all-mpnet-base-v2")
+
+
+# ---- 全局重排模型单例 ----
+RERANKER_MODEL_NAME = os.getenv("RERANKER_MODEL_NAME", "BAAI/bge-reranker-v2-m3")
+try:
+    _GLOBAL_RERANKER = CrossEncoder(RERANKER_MODEL_NAME)
+    logger.info(f"已加载全局重排模型: {RERANKER_MODEL_NAME}")
+except Exception as e:
+    logger.error(f"加载重排模型 {RERANKER_MODEL_NAME} 失败: {e}。重排功能将不可用。")
+    _GLOBAL_RERANKER = None
+
+# ---- Jieba Tokenizer for BM25 ----
+def chinese_tokenizer(text: str) -> List[str]:
+    """使用Jieba进行中文分词"""
+    return jieba.lcut(text)
+
+logger.info("Jieba分词器已初始化用于BM25。")
+
 class RAGEngine:
     """
-    RAG引擎，提供三种核心AI服务：
+    RAG引擎，通过“召回-重排”混合检索和LLM提供三种核心AI服务：
     1. 聊天 (Chat): 支持有/无文档上下文的对话。
-    2. 测验 (Quiz): 支持有/无文档上下文的测验生成，可理解自然语言需求。
-    3. 摘要 (Summary): 必须有文档，为文档生成摘要。
+    2. 测验 (Quiz): 支持有/无文档上下文的测验生成。
+    3. 摘要 (Summary): 为指定文档生成摘要。
     """
     DEFAULT_CONFIG = {
-        'chunk_size': 1000, 'chunk_overlap': 100, 'top_k_retrieval': 3,
+        'chunk_size': 1000, 'chunk_overlap': 100, 'initial_retrieval_k': 20, # 初始检索阶段（BM25+向量），每个检索器召回的数量
+        'top_n_rerank': 5,         # 重排后，最终选择的文档数量
+        'ensemble_weights': [0.5, 0.5], # 混合检索权重 [BM25, Vector]
         'vector_store_dir': VECTOR_STORE_DIR, 'default_question_count': 5,
         'default_question_types': ['MC', 'TF'], 'default_difficulty': 'medium',
     }
     
     def __init__(self, document_id: int = None, llm_client = None, config: Dict = None):
         self.document = None
-        self.vector_store = None
+        self.retriever = None  # 将使用带重排的混合检索器
         self.config = {**self.DEFAULT_CONFIG, **(config or {})}
         
         if document_id:
@@ -43,10 +84,11 @@ class RAGEngine:
             except Document.DoesNotExist: logger.error(f"文档ID {document_id} 不存在.")
 
         self.llm_client = llm_client or LLMClientFactory.create_client()
-        self.embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-mpnet-base-v2")
+        # 使用全局单例嵌入模型
+        self.embeddings = _GLOBAL_EMBEDDINGS
         
         if self.document and self.document.is_processed:
-            self._load_vector_store()
+            self._initialize_retrievers()
 
     # --- Public API ---
 
@@ -132,7 +174,7 @@ class RAGEngine:
         """处理并嵌入文档"""
         if not self.document: return False
         if self.document.is_processed and not force_reprocess:
-            if not self.vector_store: self._load_vector_store()
+            self._initialize_retrievers() # 确保即使不重新处理，检索器也被初始化
             return True
         try:
             doc_content = self.document.content
@@ -149,33 +191,99 @@ class RAGEngine:
             persist_dir = os.path.join(self.config['vector_store_dir'], str(self.document.id))
             document_chunks = list(self.document.chunks.all())
             metadatas = [{'chunk_id': str(c.id)} for c in document_chunks]
-            self.vector_store = Chroma.from_texts([c.content for c in document_chunks], self.embeddings, metadatas=metadatas, persist_directory=persist_dir)
-            self.vector_store.persist()
+            vector_store = Chroma.from_texts([c.content for c in document_chunks], self.embeddings, metadatas=metadatas, persist_directory=persist_dir)
+            vector_store.persist()
 
             self.document.is_processed = True
             self.document.save()
+            self._initialize_retrievers() # 处理完成后，立即初始化检索器
             return True
         except Exception as e:
             logger.exception(f"处理文档失败: {e}")
             return False
 
     def retrieve_relevant_chunks(self, query: str) -> List[DocumentChunk]:
-        """根据查询检索相关的文档分块"""
-        if not self.vector_store: self._load_vector_store()
-        if not self.vector_store: return []
+        """根据查询使用"召回-重排"混合检索流程，检索相关的文档分块"""
+        if not self.retriever:
+            logger.warning(f"检索器未初始化 (文档ID: {self.document.id if self.document else 'N/A'})。尝试现在初始化。")
+            if self.document:
+                self._initialize_retrievers()
+            if not self.retriever:
+                logger.error("初始化检索器失败。无法继续检索。")
+                return []
+        
         try:
-            results = self.vector_store.similarity_search(query, k=self.config['top_k_retrieval'])
-            chunk_ids = [doc.metadata.get('chunk_id') for doc in results]
-            return list(DocumentChunk.objects.filter(id__in=[cid for cid in chunk_ids if cid]))
+            results = self.retriever.get_relevant_documents(query)
+            
+            # 使用有序的chunk_id列表从数据库中一次性获取，并保持顺序
+            chunk_ids = [doc.metadata.get('chunk_id') for doc in results if doc.metadata.get('chunk_id')]
+            if not chunk_ids:
+                return []
+
+            # 保持从reranker得到的顺序
+            chunks_map = {str(c.id): c for c in DocumentChunk.objects.filter(id__in=chunk_ids)}
+            ordered_chunks = [chunks_map[cid] for cid in chunk_ids if cid in chunks_map]
+            
+            return ordered_chunks
         except Exception as e:
-            logger.exception(f"检索失败: {e}")
+            logger.exception(f"检索-重排流程失败 (查询: '{query}'): {e}")
             return []
 
     # --- Private Helpers ---
-    def _load_vector_store(self):
+    def _initialize_retrievers(self):
+        """初始化一个带重排的混合检索管道."""
+        if not self.document:
+            logger.warning("无文档加载，无法初始化检索器。")
+            return
+
+        all_chunks = list(self.document.chunks.all())
+        if not all_chunks:
+            logger.warning(f"文档 {self.document.id} 不包含任何文本块，跳过检索器初始化。")
+            return
+
+        langchain_docs = [
+            LangchainDocument(page_content=c.content, metadata={'chunk_id': str(c.id)}) for c in all_chunks
+        ]
+        
+        k = self.config.get('initial_retrieval_k', 20)
+        
+        # 1. 初始化 BM25 检索器
+        bm25_retriever = BM25Retriever.from_documents(
+            documents=langchain_docs,
+            preprocess_func=chinese_tokenizer,
+            k=k
+        )
+
+        # 2. 初始化向量存储检索器
+        vector_retriever = None
         persist_dir = os.path.join(self.config['vector_store_dir'], str(self.document.id))
         if os.path.exists(persist_dir):
-            self.vector_store = Chroma(persist_directory=persist_dir, embedding_function=self.embeddings)
+            vector_store = Chroma(persist_directory=persist_dir, embedding_function=self.embeddings)
+            vector_retriever = vector_store.as_retriever(search_kwargs={"k": k})
+        else:
+            logger.warning(f"未找到文档 {self.document.id} 的向量存储。混合检索将只依赖BM25。")
+
+        # 3. 组合成基础的混合检索器
+        if vector_retriever:
+            base_retriever = EnsembleRetriever(
+                retrievers=[bm25_retriever, vector_retriever],
+                weights=self.config['ensemble_weights']
+            )
+        else: # 回退到只有BM25
+            base_retriever = bm25_retriever
+        
+        # 4. 如果重排模型加载成功，则创建带重排的压缩检索器
+        if _GLOBAL_RERANKER:
+            compressor = CrossEncoderReranker(model=_GLOBAL_RERANKER, top_n=self.config.get('top_n_rerank', 5))
+            self.retriever = ContextualCompressionRetriever(
+                base_compressor=compressor, 
+                base_retriever=base_retriever
+            )
+            logger.info(f"已为文档 {self.document.id} 初始化带重排的混合检索器。")
+        else:
+            # Fallback if reranker model failed to load
+            self.retriever = base_retriever
+            logger.warning(f"重排模型加载失败。已为文档 {self.document.id} 初始化仅混合检索的回退检索器。")
 
     def _split_document(self, content: str) -> List[str]:
         splitter = RecursiveCharacterTextSplitter(chunk_size=self.config['chunk_size'], chunk_overlap=self.config['chunk_overlap'])
