@@ -32,6 +32,26 @@
                 <span>管理学习项目</span>
             </el-menu-item>
         </el-menu>
+        <!-- 学习计划卡片 -->
+        <div 
+            @click="gotoTaskManage" 
+            class="study-plan-card"
+        >
+            <i class="el-icon-date" style="color: #d48806"></i>
+            <span>我的学习计划</span>
+        </div>
+        <!-- 用户信息展示 -->
+        <div class="user-info" style="position: fixed; bottom: 0; left: 0; width: 240px; padding: 15px; border-top: 1px solid #e0d6c2; background: #f1e9dd;">
+            <div style="display: flex; align-items: center; padding: 10px;">
+            <el-avatar :size="40" style="background: #8b7355; margin-right: 10px;">
+                {{ userInitial }}
+            </el-avatar>
+            <div>
+                <div style="color: #5a4a3a; font-weight: bold; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 150px;">{{ username }}</div>
+                <div style="color: #8b7355; font-size: 12px;">已登录</div>
+            </div>
+            </div>
+        </div>
     </el-aside>
     
     <el-container>
@@ -281,6 +301,29 @@
       0%, 80%, 100% { transform: scale(0.7); opacity: 0.5; }
       40% { transform: scale(1.2); opacity: 1; }
     }
+
+    .study-plan-card {
+        margin: 24px 8px 0 8px;
+        width: calc(100% - 16px);
+        border-radius: 8px;
+        background: #fff7e6;
+        color: #d48806;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        font-size: 15px;
+        font-weight: 500;
+        gap: 8px;
+        box-shadow: 0 2px 8px rgba(212,136,6,0.08);
+        padding: 12px 0;
+        transition: background 0.2s, transform 0.18s, box-shadow 0.18s;
+    }
+    .study-plan-card:hover {
+        background: #ffe7ba;
+        transform: scale(1.045);
+        box-shadow: 0 6px 18px rgba(212,136,6,0.18);
+    }
 </style>
 
 <script>
@@ -328,7 +371,11 @@ export default {
             selectedFile: null,
             selectedFileName: '', // 新增：存储选中文件名
             currentDocumentId: null, // 当前文档ID
-            isLoading: false // 加载状态
+
+
+            isLoading: false, // 加载状态
+            username: '',
+            userInitial: '',
         }
     },
     created() {
@@ -336,6 +383,16 @@ export default {
         const history = this.$store.getters.getChatHistory;
         if (history && Array.isArray(history) && history.length > 0) {
             this.messages = history.map(msg => ({...msg, timestamp: new Date(msg.timestamp)}));
+        }
+
+        // 获取当前用户信息
+        const user = this.$store.getters.getCurrentUser;
+        if (user && user.username) {
+            this.username = user.username;
+            this.userInitial = user.username.charAt(0).toUpperCase();
+        } else {
+            this.username = '未登录';
+            this.userInitial = '?';
         }
     },
     mounted() {
@@ -352,7 +409,7 @@ export default {
                 arr.push(this.aiCurrentLineText + '<span class="typing-cursor">|</span>');
             }
             return this.markdownToHtml(arr.join('\n'));
-        }
+        },
     },
     watch: {
         messages: {
@@ -500,6 +557,9 @@ export default {
         },
         gotoPrj(){
             this.$router.push({ path: '/project' });
+        },
+        gotoTaskManage() {
+            this.$router.push({ path: '/manage' });
         },
         triggerFileInput() {
             this.$refs.fileInput.click();

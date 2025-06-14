@@ -74,6 +74,12 @@ export default new Vuex.Store({
     },
     setCurrentProject({commit}, project) {
       commit('SET_CURRENT_PROJECT', project);
+    },
+    loginSuccess({commit}, userInfo) {
+      commit('setUserInfo', userInfo);
+    },
+    restoreUserInfo({commit}, userInfo) {
+      commit('setUserInfo', userInfo);
     }
   },
   modules: {

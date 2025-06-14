@@ -399,6 +399,13 @@ export default {
   },
   
   async created() {
+    // 检查localStorage中是否有用户信息
+    const userInfo = localStorage.getItem('userInfo');
+    // 将JSON字符串转换为对象
+    const parsedUserInfo = JSON.parse(userInfo);
+    // 触发Vuex action来更新store中的用户信息
+    this.$store.dispatch('restoreUserInfo', parsedUserInfo);
+
     console.log('组件创建，当前登录状态:', this.isLoggedIn);
     console.log('组件创建，当前用户名:', this.getUsername);
     
