@@ -1,5 +1,58 @@
-.cursor/rules
+# ==================== 问泉项目 .gitignore ====================
+# 专注于API设计和数据库管理的后端项目
+
+# Python相关
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Django相关
+*.log
+local_settings.py
+db.sqlite3
+db.sqlite3-journal
+media/
+staticfiles/
+
+# 环境变量
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE相关
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# 项目特定
+.cursor/
+.specstory/
+.cursorindexingignore
 structure.txt
+<<<<<<< HEAD
 apps/__pycache__
 apps/chat/__pycache__
 apps/ai_services/__pycache__
@@ -7,8 +60,45 @@ apps/documents/__pycache__
 apps/quiz/__pycache__
 InquirySpring/__pycache__
 .idea
+tests/
+media/
+start_backend.py
+=======
 InquirySpring.code-workspace
-.specstory/
-.cursorindexingignore
+
+# 迁移文件（开发阶段）
+apps/*/migrations/
+
+# 临时文件
 fix_ai_services.py
+demo_test.py
+test_api.py
+check_db.py
+
+# 前端相关文件（由其他团队负责）
+templates/
+static/
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.npm
+.yarn-integrity
+
+# 向量存储
+vector_store/
+
+#文件夹
+.vs/
+API_DOCUMENTATION.md
+API_STRUCTURE.md
+API_SUMMARY.md
+api_views.py
+test_all_apis.py
+test_new_api_structure.py
+FRONTEND_API_GUIDE.md
+README.md
+.gitignore
+FRONTEND_CLEANUP_SUMMARY.md
+>>>>>>> a8cbec81e8695ac4bba2c6ac122dbabeee188b7d
 test_ai_service.py
