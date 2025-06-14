@@ -104,7 +104,7 @@ def test_gemini_client():
     client = LLMClientFactory.create_client(provider='gemini')
     
     # 简单问答测试
-    prompt = "你好，请为我介绍一下什么是机器学习。"
+    prompt = "你好，请为我简单的介绍一下什么是机器学习。"
     print(f"问题: {prompt}")
     
     try:
@@ -158,7 +158,7 @@ def test_specific_gemini_model(model_id_to_test: str):
         print("错误：未能成功创建 LLM 客户端。测试中止。")
         return
 
-    prompt = f"你好，请为我介绍一下什么是机器学习？"
+    prompt = f"你好，1+1=？"
     print(f"发送给模型 {client.model_id} 的问题: {prompt}")
     
     try:
@@ -215,5 +215,5 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"检查首选模型 '{preferred_model_id}' 时出错: {e}")
 
-    # test_specific_gemini_model(preferred_model_id)
-    test_rag_engine()
+    test_specific_gemini_model(preferred_model_id)
+    #test_gemini_client()

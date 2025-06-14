@@ -13,16 +13,16 @@ class AiServicesConfig(AppConfig):
     def ready(self):
         # 导入需要在应用启动时使用的模块
         # 但不立即初始化数据库对象
-        from .prompt_manager import PromptManager
-        from .llm_client import LLMClientFactory
-        from .rag_engine import initialize_ai_services
-        
         # 避免在应用加载时访问数据库
         # 我们将通过信号在第一次请求时初始化，或使用管理命令
         
         # 添加初始化方法供后续调用
         def initialize_services():
             try:
+                # 延迟导入，避免循环依赖
+                from .prompt_manager import PromptManager
+                from .rag_engine import initialize_ai_services
+                
                 # 检查相关表是否存在
                 table_names = connection.introspection.table_names()
                 if 'ai_services_aimodel' in table_names and 'ai_services_prompttemplate' in table_names:
@@ -51,4 +51,3 @@ class AiServicesConfig(AppConfig):
                 initialize_services()
         
         post_migrate.connect(post_migrate_callback, sender=self)
-            
