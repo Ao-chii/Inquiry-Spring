@@ -9,10 +9,10 @@ from typing import List, Dict, Any, Optional
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
-from apps.documents.models import Document, DocumentChunk
+from inquiryspring_backend.documents.models import Document, DocumentChunk
 from .llm_client import LLMClientFactory
 from .prompt_manager import PromptManager
-from apps.quiz.models import Quiz, Question
+from inquiryspring_backend.quiz.models import Quiz, Question
 from django.conf import settings
 
 logger = logging.getLogger(__name__)
@@ -272,8 +272,32 @@ class RAGEngine:
         return history[-10:]
 
 def initialize_ai_services():
+    """初始化所有AI服务相关组件"""
     try:
+        # 初始化提示词模板
+        from .prompt_manager import PromptManager
+        logger.info("正在初始化提示词模板...")
         PromptManager.create_default_templates()
+        
+        # 确保向量存储目录存在
+        os.makedirs(VECTOR_STORE_DIR, exist_ok=True)
+        
+        # 初始化默认的LLM客户端（验证连接）
+        from .llm_client import LLMClientFactory
+        logger.info("正在初始化LLM客户端...")
+        client = LLMClientFactory.create_client()
+        
+        # 检查本地模型路径是否有效
+        local_model_path = os.environ.get('LOCAL_MODEL_PATH')
+        if local_model_path and os.path.exists(local_model_path):
+            logger.info(f"检测到有效的本地模型路径: {local_model_path}")
+        
+        # 检查是否需要处理未处理的文档
+        from inquiryspring_backend.documents.models import Document
+        unprocessed_docs = Document.objects.filter(is_processed=False).count()
+        if unprocessed_docs > 0:
+            logger.info(f"发现 {unprocessed_docs} 个未处理的文档。可以使用process_documents管理命令进行处理。")
+        
         logger.info("AI服务初始化完成。")
     except Exception as e:
         logger.exception(f"初始化AI服务时出错: {e}")

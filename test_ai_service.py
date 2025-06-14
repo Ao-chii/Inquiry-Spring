@@ -6,11 +6,20 @@ import django
 import sys
 import google.generativeai as genai
 
+# --- Path setup ---
+# To make this script runnable from anywhere, we need to add the backend directory to the Python path.
+# This ensures that imports like 'inquiryspring_backend.settings' and 'inquiryspring_backend.ai_services' work correctly.
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+BACKEND_DIR = os.path.join(SCRIPT_DIR, 'backend')
+
+if BACKEND_DIR not in sys.path:
+    sys.path.insert(0, BACKEND_DIR)
+
 # --- 代理设置 ---
 # 你的代理服务器地址和端口
 PROXY_HOST = "127.0.0.1"
 PROXY_PORT = "7890"
-PROXY_URL = f"http://{PROXY_HOST}:{PROXY_PORT}" # 代理服务器通常监听HTTP
+PROXY_URL = f"http://{PROXY_HOST}:{PROXY_PORT}"
 
 # 设置HTTP和HTTPS代理环境变量
 os.environ['HTTP_PROXY'] = PROXY_URL
@@ -22,13 +31,13 @@ print(f"已设置代理: HTTP_PROXY={os.environ.get('HTTP_PROXY')}, HTTPS_PROXY=
 os.environ['GOOGLE_API_KEY'] = "AIzaSyD-Q9HqDZze_LWfHflNV_f1PkqhpET_NJw"  # 替换为你的有效API密钥
 
 # 设置Django环境
-os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'InquirySpring.settings')
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'inquiryspring_backend.settings')
 django.setup()
 
 # 导入所需模块
-from apps.ai_services.llm_client import LLMClientFactory
-from apps.ai_services.rag_engine import RAGEngine
-from apps.ai_services.models import AIModel
+from inquiryspring_backend.ai_services.llm_client import LLMClientFactory
+from inquiryspring_backend.ai_services.rag_engine import RAGEngine
+from inquiryspring_backend.ai_services.models import AIModel
 
 
 # 测试LLM客户端
@@ -55,7 +64,7 @@ def test_rag_engine():
     
     # 如果已有文档，可以尝试查询
     try:
-        from apps.documents.models import Document
+        from backend.inquiryspring_backend.documents.models import Document
         docs = Document.objects.all()
         if not docs.exists():
             # 创建一个测试文档
@@ -158,7 +167,7 @@ def test_specific_gemini_model(model_id_to_test: str):
         print("错误：未能成功创建 LLM 客户端。测试中止。")
         return
 
-    prompt = f"你好，1+1=？"
+    prompt = f"你好，为我讲解一下什么是卷积神经网络"
     print(f"发送给模型 {client.model_id} 的问题: {prompt}")
     
     try:
