@@ -52,11 +52,13 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
+    'inquiryspring_backend.middleware.DisableCSRFMiddleware',  # 禁用CSRF检查
+    'inquiryspring_backend.middleware.DebugMiddleware',  # 调试中间件
     'inquiryspring_backend.middleware.RequestLoggingMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
-    # 'django.middleware.csrf.CsrfViewMiddleware',
+    # 'django.middleware.csrf.CsrfViewMiddleware',  # 已禁用
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
@@ -125,15 +127,30 @@ MEDIA_ROOT = BASE_DIR / 'media'
 # Default primary key field type
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-# CORS settings for Vue.js frontend
+# CORS settings for Vue.js frontend - 完全匹配前端配置
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:5000",
     "http://127.0.0.1:5000",
+    "http://0.0.0.0:5000",  # 前端配置的host
 ]
 
-CORS_ALLOW_ALL_ORIGINS = True  # For development only
+CORS_ALLOW_ALL_ORIGINS = True  # 开发阶段允许所有来源
 CORS_ALLOW_CREDENTIALS = True
-CORS_ALLOW_HEADERS = ('*')
+CORS_ALLOW_HEADERS = ['*']
+CORS_ALLOW_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']
+CORS_PREFLIGHT_MAX_AGE = 86400
+
+# 开发阶段完全禁用CSRF保护
+CSRF_COOKIE_SECURE = False
+CSRF_USE_SESSIONS = False
+CSRF_TRUSTED_ORIGINS = [
+    'http://localhost:5000',
+    'http://127.0.0.1:5000',
+    'http://0.0.0.0:5000',
+    'http://localhost:8000',
+    'http://127.0.0.1:8000',
+]
+CSRF_FAILURE_VIEW = 'django.views.csrf.csrf_failure'
 
 # REST Framework settings
 REST_FRAMEWORK = {

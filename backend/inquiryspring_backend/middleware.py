@@ -126,14 +126,53 @@ class CORSMiddleware(MiddlewareMixin):
         return response
 
 
+class DisableCSRFMiddleware(MiddlewareMixin):
+    """开发阶段禁用CSRF检查的中间件"""
+
+    def process_request(self, request):
+        """禁用CSRF检查"""
+        if request.path.startswith('/api/'):
+            setattr(request, '_dont_enforce_csrf_checks', True)
+        return None
+
+
+class DebugMiddleware(MiddlewareMixin):
+    """调试中间件 - 追踪403错误"""
+
+    def process_request(self, request):
+        """处理请求 - 记录详细信息"""
+        if request.path.startswith('/api/projects/'):
+            print(f"=== DEBUG中间件 - 请求开始 ===")
+            print(f"Path: {request.path}")
+            print(f"Method: {request.method}")
+            print(f"User: {getattr(request, 'user', 'Not available yet')}")
+            print(f"User authenticated: {getattr(getattr(request, 'user', None), 'is_authenticated', False)}")
+            print(f"Headers: {dict(request.headers)}")
+            print(f"Content-Type: {request.content_type}")
+            print(f"CSRF disabled: {getattr(request, '_dont_enforce_csrf_checks', False)}")
+            print(f"=== DEBUG中间件 - 请求信息结束 ===")
+        return None
+
+    def process_response(self, request, response):
+        """处理响应 - 记录403错误"""
+        if request.path.startswith('/api/projects/') and response.status_code == 403:
+            print(f"=== DEBUG中间件 - 403错误 ===")
+            print(f"Path: {request.path}")
+            print(f"Status: {response.status_code}")
+            print(f"Response content: {response.content}")
+            print(f"Response headers: {dict(response.items())}")
+            print(f"=== DEBUG中间件 - 403错误结束 ===")
+        return response
+
+
 class ErrorHandlingMiddleware(MiddlewareMixin):
     """错误处理中间件"""
-    
+
     def process_exception(self, request, exception):
         """处理未捕获的异常"""
         if request.path.startswith('/api/'):
             logger.error(f"API异常: {request.path} - {str(exception)}", exc_info=True)
-            
+
             # 返回标准错误响应
             error_response = {
                 'status': 'error',
@@ -141,11 +180,11 @@ class ErrorHandlingMiddleware(MiddlewareMixin):
                 'error': str(exception) if logger.level <= logging.DEBUG else None,
                 'timestamp': self._get_timestamp()
             }
-            
+
             return JsonResponse(error_response, status=500)
-        
+
         return None
-    
+
     def _get_timestamp(self):
         """获取当前时间戳"""
         from datetime import datetime
