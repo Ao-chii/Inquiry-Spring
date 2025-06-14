@@ -20,16 +20,13 @@ class AiServicesConfig(AppConfig):
         def initialize_services():
             try:
                 # 延迟导入，避免循环依赖
-                from .prompt_manager import PromptManager
                 from .rag_engine import initialize_ai_services
                 
                 # 检查相关表是否存在
                 table_names = connection.introspection.table_names()
                 if 'ai_services_aimodel' in table_names and 'ai_services_prompttemplate' in table_names:
                     logger.info("开始初始化AI服务...")
-                    PromptManager.create_default_templates()
-                    # 仅在必要时创建默认客户端
-                    # LLMClientFactory.create_client()
+                    # 调用rag_engine中的综合初始化函数
                     initialize_ai_services()
                     logger.info("AI服务初始化完成")
                 else:
