@@ -13,5 +13,6 @@ urlpatterns = [
 
     # API接口
     path('history/', views.chat_history, name='chat_history'),
+    path('status/<int:session_id>/', views.chat_status, name='chat_status'),
     # 删除了反馈功能路由
 ]

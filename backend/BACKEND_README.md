@@ -170,12 +170,15 @@ inquiryspring-backend/
 ├── settings.py          # Django配置
 ├── urls.py             # URL路由
 ├── wsgi.py             # WSGI配置
-├── ai_service_wrapper.py # AI服务包装器
 ├── chat/               # 聊天应用
 ├── documents/          # 文档管理应用
 ├── quiz/              # 测验应用
 ├── projects/          # 项目管理应用
-└── ai_services/       # AI服务模块（现有）
+└── ai_services/       # AI服务模块（主要AI功能）
+    ├── rag_engine.py   # RAG引擎核心
+    ├── llm_client.py   # LLM客户端
+    ├── models.py       # AI服务数据模型
+    └── prompt_manager.py # 提示词管理
 ```
 
 ## 开发说明
@@ -183,11 +186,12 @@ inquiryspring-backend/
 ### 添加新功能
 1. 在相应的应用中创建视图
 2. 更新URL配置
-3. 如需AI功能，使用 `ai_service_wrapper`
+3. 如需AI功能，直接使用 `ai_services.rag_engine.RAGEngine`
 
 ### AI服务扩展
-- 修改 `ai_service_wrapper.py` 添加新的AI功能
-- 支持多种AI提供商
+- 修改 `ai_services/rag_engine.py` 添加新的AI功能
+- 在 `ai_services/llm_client.py` 中添加新的LLM提供商
+- 支持多种AI提供商和本地模型
 - 提供离线模拟模式
 
 ### 数据库模型

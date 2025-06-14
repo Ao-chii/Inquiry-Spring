@@ -4,15 +4,30 @@ Django settings for InquirySpring Backend.
 
 import os
 from pathlib import Path
+from dotenv import load_dotenv
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+# Load environment variables from .env file
+load_dotenv(BASE_DIR / '.env')
+
+# 设置Hugging Face相关环境变量
+if os.getenv('USE_PROXY', 'false').lower() == 'true':
+    proxy_url = os.getenv('PROXY_URL', 'http://127.0.0.1:7890')
+    os.environ['HTTP_PROXY'] = proxy_url
+    os.environ['HTTPS_PROXY'] = proxy_url
+
+# 设置Hugging Face Hub配置
+os.environ['HF_ENDPOINT'] = os.getenv('HF_ENDPOINT', 'https://huggingface.co')
+os.environ['TRANSFORMERS_OFFLINE'] = os.getenv('TRANSFORMERS_OFFLINE', '0')
+os.environ['HF_HUB_OFFLINE'] = os.getenv('HF_HUB_OFFLINE', '0')
+
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-inquiry-spring-secret-key-change-in-production'
+SECRET_KEY = os.getenv('SECRET_KEY', 'django-insecure-inquiry-spring-secret-key-change-in-production')
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = os.getenv('DEBUG', 'True').lower() in ('true', '1', 'yes')
 
 ALLOWED_HOSTS = ['*']
 
@@ -160,5 +175,36 @@ LOGGING = {
             'level': 'DEBUG',
             'propagate': False,
         },
+        'inquiryspring_backend.ai_services': {
+            'handlers': ['console'],
+            'level': 'DEBUG',
+            'propagate': False,
+        },
     },
+}
+
+# AI Services Configuration
+AI_SERVICES = {
+    'RAG_ENGINE': {
+        'chunk_size': 1000,
+        'chunk_overlap': 100,
+        'top_k_retrieval': 3,
+        'default_question_count': 5,
+        'default_question_types': ['MC', 'TF'],
+        'default_difficulty': 'medium',
+    },
+    'VECTOR_STORE_DIR': BASE_DIR / 'vector_store',
+    'EMBEDDINGS_MODEL': 'sentence-transformers/all-mpnet-base-v2',
+    'DEFAULT_MODEL': {
+        'name': 'Gemini Flash 2.5',
+        'provider': 'gemini',
+        'model_id': 'gemini-2.5-flash-preview-05-20',
+        'api_key': os.getenv('GOOGLE_API_KEY', ''),
+        'max_tokens': 8000,
+        'temperature': 0.7,
+        'is_active': True,
+        'is_default': True
+    },
+    'GOOGLE_API_KEY': os.getenv('GOOGLE_API_KEY', ''),
+    'GEMINI_OFFLINE_MODE': os.getenv('GEMINI_OFFLINE_MODE', 'False').lower() in ('true', '1', 'yes'),
 }

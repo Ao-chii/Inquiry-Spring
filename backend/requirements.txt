@@ -20,9 +20,11 @@ python-dotenv>=1.0.0
 # 工具库
 werkzeug>=2.3.0
 
-# 可选：高级AI功能（如果需要使用现有的ai_services模块）
-# langchain>=0.1.0
-# langchain-community>=0.0.20
-# chromadb>=0.4.0
-# sentence-transformers>=2.2.0
-# transformers>=4.30.0
+# AI服务高级功能（ai_services模块必需）
+langchain>=0.1.0
+langchain-community>=0.0.20
+chromadb>=0.4.0
+sentence-transformers>=2.2.0
+transformers>=4.30.0
+torch>=2.0.0
+huggingface-hub>=0.16.0

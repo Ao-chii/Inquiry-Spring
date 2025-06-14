@@ -122,8 +122,29 @@ def truncate_text(text: str, max_length: int = 100) -> str:
 def get_ai_service_status() -> Dict[str, Any]:
     """获取AI服务状态"""
     try:
-        from .ai_service_wrapper import ai_service
-        return ai_service.get_status()
+        import os
+        from .ai_services.llm_client import LLMClientFactory
+
+        # 检查API密钥配置
+        api_key_configured = bool(os.environ.get('GOOGLE_API_KEY'))
+
+        # 检查离线模式
+        offline_mode = os.environ.get("GEMINI_OFFLINE_MODE", "").lower() in ("true", "1", "yes")
+
+        # 尝试创建LLM客户端来验证服务状态
+        try:
+            client = LLMClientFactory.create_client()
+            service_available = True
+        except Exception:
+            service_available = False
+
+        return {
+            'status': 'ready' if api_key_configured and service_available and not offline_mode else 'limited',
+            'api_key_configured': api_key_configured,
+            'offline_mode': offline_mode,
+            'service_available': service_available,
+            'services_available': ['chat', 'quiz', 'summary']
+        }
     except Exception as e:
         return {
             'status': 'error',

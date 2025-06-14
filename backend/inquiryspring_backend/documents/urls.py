@@ -11,6 +11,16 @@ urlpatterns = [
     path('<int:doc_id>/summarize/', views.document_summarize, name='document_summarize_new'),
     path('<int:doc_id>/status/', views.document_status, name='document_status'),
     path('formats/', views.document_formats, name='document_formats'),
+    path('generate-summary/', views.generate_document_summary, name='generate_document_summary'),
+    path('ai-status/', views.ai_service_status, name='ai_service_status'),
+    path('uploaded-files/', views.get_uploaded_files, name='get_uploaded_files'),
+    path('generate-summary-by-filename/', views.generate_summary_by_filename, name='generate_summary_by_filename'),
+    path('debug/', views.debug_documents, name='debug_documents'),
+    path('test-summarize/', views.test_summarize, name='test_summarize'),
+    path('latest/', views.get_latest_document, name='get_latest_document'),
+    path('summarize-files/', views.get_summarize_files, name='get_summarize_files'),
+    path('quick-test/', views.quick_test_summary, name='quick_test_summary'),
+    path('summarize-files/', views.get_summarize_files, name='get_summarize_files'),
 
     # 文档处理API - 统一使用SummarizeView
     path('process/', views.SummarizeView.as_view(), name='document_process'),
