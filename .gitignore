@@ -99,3 +99,6 @@ README.md
 .gitignore
 FRONTEND_CLEANUP_SUMMARY.md
 test_ai_service.py
+
+#数据库
+backend/inquiryspring_backend/db.sqlite3
