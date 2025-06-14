@@ -32,9 +32,7 @@ INSTALLED_APPS = [
     'inquiryspring_backend.documents',
     'inquiryspring_backend.quiz',
     'inquiryspring_backend.projects',
-
-    # AI services (existing) - 暂时禁用以避免依赖问题
-    # 'inquiryspring_backend.ai_services',
+    'inquiryspring_backend.ai_services',
 ]
 
 MIDDLEWARE = [
