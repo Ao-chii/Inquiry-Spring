@@ -147,12 +147,17 @@ class PromptManager:
                             [
                             {
                                 "content": "问题内容",
-                                "type": "MC",
-                                "options": ["选项A", "选项B", "选项C", "选项D"],
-                                "correct_answer": "A",
+                                "type": "MC/MCM/TF/FB/SA", // 使用上述题型代码
+                                "options": ["选项A", "选项B", "选项C", "选项D"], // 选择题需要
+                                "correct_answer": "正确答案", // 根据题型不同有不同格式：
+                                                            // 单选题: "A"、"B"等字母
+                                                            // 多选题: ["A", "C"]等字母数组
+                                                            // 判断题: "正确"或"错误"
+                                                            // 填空题: "具体答案文本"
+                                                            // 简答题: ["关键点1", "关键点2", ...]
                                 "explanation": "详细解析",
-                                "difficulty": "medium",
-                                "knowledge_points": ["知识点1", "知识点2"]
+                                "difficulty": "medium",   // 难度：easy、medium、hard
+                                "knowledge_points": ["知识点1", "知识点2"] // 与问题相关的知识点
                             }
                             ]
                             ```""",

@@ -69,6 +69,8 @@ class RAGEngine:
             if retrieved_chunks:
                 has_doc_context = True
                 prompt_vars['reference_text'] = "\n\n---\n\n".join([c.content for c in retrieved_chunks])
+                prompt_vars['chunk_ids'] = [c.id for c in retrieved_chunks]
+                prompt_vars['chunk_positions'] = [f"第{c.chunk_index+1}段" for c in retrieved_chunks]
 
         prompt = PromptManager.render_by_type('chat', prompt_vars)
         system_prompt = "你是一个学习助手。请基于参考资料回答问题。" if has_doc_context else "你是一个学习助手。请清晰地回答问题。"
@@ -149,7 +151,7 @@ class RAGEngine:
             metadatas = [{'chunk_id': str(c.id)} for c in document_chunks]
             self.vector_store = Chroma.from_texts([c.content for c in document_chunks], self.embeddings, metadatas=metadatas, persist_directory=persist_dir)
             self.vector_store.persist()
-            
+
             self.document.is_processed = True
             self.document.save()
             return True
@@ -184,8 +186,17 @@ class RAGEngine:
         {"topic": "主题", "question_types": ["MC"], "difficulty": "medium", "question_count": 5}"""
         response = self.llm_client.generate_text(prompt=user_query, system_prompt=system_prompt, task_type='quiz')
         try:
-            return self._parse_json_from_response(response.get("text", "{}"))
-        except json.JSONDecodeError:
+            # 解析响应并确保它是一个字典
+            parsed_result = self._parse_json_from_response(response.get("text", "{}"))
+            
+            # 如果解析结果不是字典（例如是列表或其他类型），返回默认字典
+            if not isinstance(parsed_result, dict):
+                logger.warning(f"解析测验约束时得到了非字典结果: {type(parsed_result)}，使用默认字典")
+                return {"topic": user_query}
+                
+            return parsed_result
+        except Exception as e:
+            logger.exception(f"提取测验约束时出错: {e}")
             return {"topic": user_query}
 
     def _generate_quiz_with_doc(self, **kwargs) -> Dict[str, Any]:
@@ -211,6 +222,10 @@ class RAGEngine:
             quiz_title = f"{self.document.title} - {topic}" if self.document else topic
             quiz_obj = Quiz.objects.create(document=self.document, title=quiz_title, difficulty_level=difficulty, total_questions=len(quiz_data))
             for i, q_data in enumerate(quiz_data):
+                # 字段映射：将 "type" 映射到 "question_type"
+                if 'type' in q_data:
+                    q_data['question_type'] = q_data.pop('type')
+                
                 Question.objects.create(quiz=quiz_obj, **q_data, order=i + 1)
             response.update({'quiz_id': quiz_obj.id, 'quiz_data': quiz_data})
         except Exception as e:
@@ -219,8 +234,36 @@ class RAGEngine:
         return response
 
     def _parse_json_from_response(self, text: str) -> Any:
+        """解析LLM响应中的JSON，处理各种格式和注释"""
+        # 首先尝试从Markdown代码块中提取JSON
         match = re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', text)
-        return json.loads(match.group(1) if match else text)
+        json_str = match.group(1) if match else text
+        
+        # 移除JSON注释 (// 和 /* */ 形式的注释)
+        json_str = re.sub(r'//.*?$', '', json_str, flags=re.MULTILINE)  # 移除单行注释
+        json_str = re.sub(r'/\*.*?\*/', '', json_str, flags=re.DOTALL)  # 移除多行注释
+        
+        # 处理尾随逗号
+        json_str = re.sub(r',(\s*[\]}])', r'\1', json_str)
+        
+        try:
+            return json.loads(json_str)
+        except json.JSONDecodeError as e:
+            logger.warning(f"JSON解析失败: {e}, 尝试进一步清理")
+            # 进一步尝试清理，移除可能导致问题的所有非标准JSON内容
+            # 移除所有注释形式的行
+            clean_lines = []
+            for line in json_str.split('\n'):
+                if not re.search(r'^\s*//|^\s*/\*|\*/', line):
+                    clean_lines.append(line)
+            clean_json = '\n'.join(clean_lines)
+            
+            try:
+                return json.loads(clean_json)
+            except json.JSONDecodeError:
+                # 如果仍然失败，返回空列表或空字典
+                logger.error(f"JSON解析彻底失败，返回空结果")
+                return [] if json_str.strip().startswith('[') else {}
 
     def _format_conversation_history(self, history: List[Dict[str, Any]]) -> str:
         return "\n\n".join([f"{'用户' if m.get('is_user') else '助手'}: {m.get('content')}" for m in history])

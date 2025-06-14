@@ -2,8 +2,6 @@ from django.apps import AppConfig
 import logging
 from django.db import connection
 from django.db.models.signals import post_migrate
-from .prompt_manager import PromptManager
-from .rag_engine import initialize_ai_services
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +19,10 @@ class AiServicesConfig(AppConfig):
         # 添加初始化方法供后续调用
         def initialize_services():
             try:
+                # 延迟导入，避免循环依赖
+                from .prompt_manager import PromptManager
+                from .rag_engine import initialize_ai_services
+                
                 # 检查相关表是否存在
                 table_names = connection.introspection.table_names()
                 if 'ai_services_aimodel' in table_names and 'ai_services_prompttemplate' in table_names:

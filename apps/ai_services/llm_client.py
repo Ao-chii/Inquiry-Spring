@@ -280,48 +280,80 @@ class GeminiClient(BaseLLMClient):
                 )
                 
                 # 处理响应，确保text属性存在
+                response_text = ""
                 try:
-                    response_text = response.text
-                except Exception as text_error:
-                    # 尝试从候选项中获取文本
-                    if hasattr(response, 'candidates') and response.candidates:
+                    # 首先检查response candidates中是否有finish_reason为MAX_TOKENS的情况
+                    if response.candidates and hasattr(response.candidates[0], 'finish_reason'):
                         candidate = response.candidates[0]
-                        if hasattr(candidate, 'content') and candidate.content:
-                            response_text = str(candidate.content)
-                        else:
-                            error_msg = f"无法从候选项中获取文本: {str(text_error)}"
-                            logger.exception(error_msg)
-                            # 更新任务日志
-                            processing_time = time.time() - start_time
-                            self._update_task_log(
-                                task_log,
-                                {},
-                                "failed",
-                                0,
-                                processing_time,
-                                error_msg
-                            )
-                            return {
-                                "error": error_msg,
-                                "text": "很抱歉，无法获取Gemini响应内容，请稍后再试。",
-                                "model": self.model_id
-                            }
+                        finish_reason = candidate.finish_reason.name if hasattr(candidate.finish_reason, 'name') else str(candidate.finish_reason)
+                        
+                        if finish_reason == "MAX_TOKENS":
+                            logger.warning("检测到Gemini响应因达到最大tokens限制而被截断")
+                            # 即使在MAX_TOKENS的情况下，也尝试提取已经生成的内容
+                            if candidate.content and candidate.content.parts:
+                                extracted_text = "".join(str(part.text) for part in candidate.content.parts 
+                                                       if hasattr(part, 'text') and part.text is not None)
+                                if extracted_text:
+                                    logger.info("成功提取被截断的内容")
+                                    response_text = extracted_text
+                                    # 直接继续处理，不抛出异常
+                            else:
+                                # 对于MAX_TOKENS但没有内容的特殊情况
+                                logger.warning("检测到MAX_TOKENS但无法提取内容，返回默认消息")
+                                # 设置一个默认消息，而不是错误
+                                response_text = "内容因超出长度限制而被截断。"
+                                # 全局定义extracted_text变量，以便后续设置正确的finish_reason
+                                extracted_text = response_text
+                    
+                    # 如果没有被MAX_TOKENS截断，或者没能从MAX_TOKENS中提取内容，则尝试正常方式获取text
+                    if not response_text:
+                        response_text = response.text
+                except Exception as text_error:
+                    logger.warning(f"直接访问 response.text 失败: {text_error}。尝试手动解析候选项。")
+                    if response.candidates:
+                        # 从第一个候选项连接所有文本部分
+                        candidate = response.candidates[0]
+                        if candidate.content and candidate.content.parts:
+                            response_text = "".join(str(part.text) for part in candidate.content.parts 
+                                                 if hasattr(part, 'text') and part.text is not None)
+                        
+                if not response_text:
+                    # 如果 response_text 仍然为空，说明响应可能被阻止了或者发生了其他问题
+                    finish_reason = "Unknown"
+                    safety_ratings_str = "N/A"
+                    
+                    if response.candidates:
+                        candidate = response.candidates[0]
+                        finish_reason = candidate.finish_reason.name if hasattr(candidate.finish_reason, 'name') else str(candidate.finish_reason)
+                        safety_ratings_str = str(candidate.safety_ratings)
+                        
+                        # 特殊处理MAX_TOKENS情况，如果之前未处理
+                        if finish_reason == "MAX_TOKENS":
+                            # 即使没有内容，也返回一个优雅的消息而不是错误
+                            logger.warning(f"在第二次尝试中检测到MAX_TOKENS但无法提取内容，返回默认消息")
+                            response_text = "内容因超出长度限制而被截断。"
+                            extracted_text = response_text  # 设置extracted_text以标记这是MAX_TOKENS情况
+                            
+                    # 如果有一个有效的响应文本，无论是从哪里获得的，就使用它
+                    if response_text:
+                        logger.info(f"成功获取响应内容，长度: {len(response_text)}")
                     else:
-                        error_msg = f"响应中缺少文本内容: {str(text_error)}"
-                        logger.exception(error_msg)
-                        # 更新任务日志
+                        # 其他情况，真正无法提取内容
+                        error_msg = f"未能从Gemini响应中提取有效文本。完成原因: {finish_reason}. 安全评级: {safety_ratings_str}"
+                        logger.error(error_msg)
+                        
                         processing_time = time.time() - start_time
                         self._update_task_log(
                             task_log,
-                            {},
-                            "failed",
-                            0,
-                            processing_time,
-                            error_msg
+                            output_data={"error": error_msg, "raw_response": str(response)},
+                            status="failed",
+                            tokens_used=0,
+                            processing_time=processing_time,
+                            error_msg=error_msg
                         )
                         return {
                             "error": error_msg,
-                            "text": "很抱歉，无法获取Gemini响应内容，请稍后再试。",
+                            "text": f"抱歉，无法获取Gemini响应内容。原因: {finish_reason}",
                             "model": self.model_id
                         }
                 
@@ -334,11 +366,18 @@ class GeminiClient(BaseLLMClient):
                 logger.debug(f"Token使用情况 - 输入: {input_tokens}, 输出: {output_tokens}, 总计: {tokens_used}")
             
             # 构建结果
+            # 确定正确的finish_reason
+            finish_reason = "stop"
+            # 如果之前检测到了MAX_TOKENS情况，更新finish_reason
+            if "extracted_text" in locals() and extracted_text:
+                finish_reason = "MAX_TOKENS"
+                logger.info(f"返回已截断的响应，finish_reason设置为: {finish_reason}")
+            
             result = {
                 "text": response_text,
                 "tokens_used": tokens_used,
                 "model": self.model_id,
-                "finish_reason": "stop"
+                "finish_reason": finish_reason
             }
             
             # 更新任务日志

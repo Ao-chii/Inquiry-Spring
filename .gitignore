@@ -11,3 +11,4 @@ InquirySpring.code-workspace
 .specstory/
 .cursorindexingignore
 fix_ai_services.py
+test_ai_service.py
