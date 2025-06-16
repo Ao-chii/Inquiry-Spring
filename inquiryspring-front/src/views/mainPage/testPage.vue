@@ -158,30 +158,30 @@
                                 <span v-if="question[i]?.type==='单选题'">
                                     <el-select v-model="answer[i]" placeholder="请选择" style="margin-top: 15px;">
                                         <el-option
-                                        v-for="item in options"
-                                        :key="item.value"
-                                        :label="item.label"
-                                        :value="item.value">
+                                        v-for="(option, index) in question[i]?.options || []"
+                                        :key="index"
+                                        :label="option"
+                                        :value="getOptionValue(option, index)">
                                         </el-option>
                                     </el-select>
                                 </span>
                                 <span v-else-if="question[i]?.type==='多选题'">
                                     <el-select v-model="answer[i]" multiple placeholder="请选择" style="margin-top: 15px;">
                                         <el-option
-                                        v-for="item in options"
-                                        :key="item.value"
-                                        :label="item.label"
-                                        :value="item.value">
+                                        v-for="(option, index) in question[i]?.options || []"
+                                        :key="index"
+                                        :label="option"
+                                        :value="getOptionValue(option, index)">
                                         </el-option>
                                     </el-select>
                                 </span>
                                 <span v-else-if="question[i]?.type==='判断题'">
                                     <el-select v-model="answer[i]" placeholder="请选择" style="margin-top: 15px;">
                                         <el-option
-                                        v-for="item in options_2"
-                                        :key="item.value"
-                                        :label="item.label"
-                                        :value="item.value">
+                                        v-for="(option, index) in question[i]?.options || ['正确', '错误']"
+                                        :key="index"
+                                        :label="option"
+                                        :value="option">
                                         </el-option>
                                     </el-select>
                                 </span>
@@ -467,6 +467,14 @@ export default {
         getAnalysis() {
             // 显示所有题目的解析
             this.showAnalysis = this.question.map(() => true);
+        },
+        getOptionValue(option, index) {
+            // 从选项文本中提取值，如果选项以"A. "开头，返回"A"，否则返回选项本身
+            if (typeof option === 'string' && option.match(/^[A-Z]\.\s/)) {
+                return option.charAt(0);
+            }
+            // 对于没有字母前缀的选项，使用字母索引
+            return String.fromCharCode(65 + index); // A, B, C, D...
         },
         markMessage(message) {
             if (!message) return '';
