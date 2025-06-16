@@ -115,14 +115,24 @@ class RAGEngine:
             
         history = self._optimize_conversation_history(conversation_history or [], query)
         log_context = {'user': user, 'session_id': session_id, 'document': self.document}
-        prompt_vars = {'query': query, 'conversation_history': self._format_conversation_history(history)}
+        
+        # 查询重写：如果有对话历史，将原始查询改写为包含上下文的完整查询
+        original_query = query
+        rewritten_query = self._rewrite_query_with_history(query, history)
+        
+        prompt_vars = {
+            'query': original_query,  # 在显示给用户时使用原始查询
+            'conversation_history': self._format_conversation_history(history)
+        }
+        
         retrieved_chunks, has_doc_context = [], False
         
         # 获取聊天示例
         chat_examples = PromptManager._get_or_create_examples('chat')
 
+        # 使用重写后的查询进行检索，以提高多轮对话中的文档检索效果
         if self.document:
-            retrieved_chunks = self.retrieve_relevant_chunks(query)
+            retrieved_chunks = self.retrieve_relevant_chunks(rewritten_query)
             if retrieved_chunks:
                 has_doc_context = True
                 prompt_vars['reference_text'] = "\n\n---\n\n".join([c.content for c in retrieved_chunks])
@@ -179,6 +189,15 @@ class RAGEngine:
                 'is_generic_answer': not has_doc_context,
                 'error': llm_response.get('error')
             }
+            
+        # 如果查询被重写了，将重写信息添加到结果中（仅用于调试）
+        if rewritten_query != original_query:
+            logger.debug(f"查询重写: '{original_query}' -> '{rewritten_query}'")
+            if settings.DEBUG:
+                result['debug_info'] = {
+                    'original_query': original_query,
+                    'rewritten_query': rewritten_query
+                }
             
         return result
 
@@ -450,10 +469,181 @@ class RAGEngine:
         return response
 
     def _format_conversation_history(self, history: List[Dict[str, Any]]) -> str:
-        return "\n\n".join([f"{'用户' if m.get('is_user') else '助手'}: {m.get('content')}" for m in history])
+        """
+        将对话历史格式化为文本，特殊处理包含摘要的对话轮次。
+        """
+        formatted_turns = []
+        for message in history:
+            content = message.get('content', '')
+            # 检查是否是摘要轮次（前面有[历史对话摘要]标记）
+            if not message.get('is_user') and content.startswith('[历史对话摘要]:'):
+                # 特殊格式化摘要轮次，使其在视觉上区分开来
+                formatted_turns.append(f"===历史对话摘要===\n{content.replace('[历史对话摘要]:', '').strip()}\n=================")
+            else:
+                # 常规对话轮次的格式化
+                formatted_turns.append(f"{'用户' if message.get('is_user') else '助手'}: {content}")
+                
+        return "\n\n".join(formatted_turns)
+
+    def _rewrite_query_with_history(self, query: str, conversation_history: List[Dict[str, Any]]) -> str:
+        """
+        根据对话历史，将用户的最新查询重写为一个独立的、完整的查询。
+        这对于处理多轮对话中的省略引用（"它是什么？"，"为什么会这样？"等）至关重要。
+        
+        Args:
+            query: 用户的原始查询
+            conversation_history: 对话历史记录
+            
+        Returns:
+            重写后的查询，如果原查询已经足够明确则返回原查询
+        """
+        # 如果没有历史或历史太短，直接返回原始查询
+        if not conversation_history or len(conversation_history) < 1:
+            return query
+            
+        try:
+            # 直接使用优化后的对话历史（可能包含摘要）
+            history_text = self._format_conversation_history(conversation_history)
+            
+            # 构建提示语，要求LLM保持简洁，仅在需要时重写查询
+            system_prompt = "你是一个专业的查询重写助手。你的任务是根据对话历史，将用户的最新查询重写为一个完整、独立、明确的查询。"
+            prompt = f"""基于以下对话历史和用户的最新问题，判断是否需要重写：
+
+对话历史:
+{history_text}
+
+用户最新问题: {query}
+
+要求:
+1. 如果最新问题已经清晰完整，可以独立理解，则直接返回原问题。
+2. 如果最新问题包含代词引用（如"它"、"他们"、"这个"等）或上下文省略，请重写为完整、独立的问题。
+3. 回答格式: 只返回重写后的问题，不要包含任何解释或其他文字。
+4. 保持简洁，不要添加不必要的内容。
+5. 充分利用对话历史（包括摘要部分）提供的上下文信息。
+
+重写后的问题:"""
+
+            # 调用LLM进行查询重写
+            response = self.llm_client.generate_text(prompt=prompt, system_prompt=system_prompt, task_type="query_rewrite")
+            rewritten_query = response.get('text', '').strip()
+            
+            # 检查重写结果是否有效
+            if not rewritten_query or len(rewritten_query) < len(query) / 2:
+                # 如果重写结果无效或过短，使用原始查询
+                logger.warning(f"查询重写结果无效或过短: '{rewritten_query}'，使用原始查询: '{query}'")
+                return query
+                
+            logger.info(f"查询重写: '{query}' -> '{rewritten_query}'")
+            return rewritten_query
+            
+        except Exception as e:
+            logger.exception(f"查询重写过程中出错: {e}")
+            # 出错时回退到原始查询
+            return query
 
     def _optimize_conversation_history(self, history: List[Dict[str, Any]], query: str) -> List[Dict[str, Any]]:
-        return history[-10:]
+        """
+        优化对话历史，使用滑动窗口+摘要的方式来处理长对话，
+        保持最近几轮对话的细节，同时为较早的对话生成摘要。
+        
+        Args:
+            history: 完整的对话历史
+            query: 当前的查询（作为上下文，不会直接处理）
+            
+        Returns:
+            优化后的对话历史，包含"摘要+最近对话"的组合
+        """
+        # 配置参数
+        recent_turns_keep = 4  # 保留完整信息的最近轮数
+        max_total_turns = 10   # 总共保留的最大轮数（包括摘要）
+        
+        # 如果历史不够长，不需要生成摘要，直接返回原始历史或截取最近部分
+        if len(history) <= recent_turns_keep:
+            return history  # 不做特殊处理，对于短对话直接使用完整历史
+            
+        try:
+            # 当历史长度超过阈值，生成较早部分的摘要
+            recent_turns = history[-recent_turns_keep:]  # 保留最近的几轮完整对话
+            earlier_turns = history[:-recent_turns_keep]  # 较早的对话，需要生成摘要
+            
+            # 如果较早部分都很短，可以保留更多轮数而不是生成摘要
+            if sum(len(str(turn.get('content', ''))) for turn in earlier_turns) < 1000:
+                # 历史不长，保留尽可能多的轮数直到max_total_turns
+                return history[-(max_total_turns):]
+                
+            # 否则为较早部分生成摘要
+            summarized_history = self._generate_conversation_summary(earlier_turns)
+            
+            # 构造摘要伪对话轮次
+            summary_turn = {
+                'is_user': False,
+                'content': f"[历史对话摘要]: {summarized_history}",
+                'timestamp': earlier_turns[-1].get('timestamp', None)
+            }
+            
+            # 组合摘要和最近对话
+            optimized_history = [summary_turn] + recent_turns
+            return optimized_history
+            
+        except Exception as e:
+            logger.exception(f"优化对话历史失败: {e}")
+            # 出错则回退到简单截取最近的对话
+            return history[-recent_turns_keep:]
+            
+    def _generate_conversation_summary(self, conversation_turns: List[Dict[str, Any]]) -> str:
+        """
+        生成对话历史的摘要
+        
+        Args:
+            conversation_turns: 要总结的对话轮次
+            
+        Returns:
+            对话摘要
+        """
+        try:
+            # 对话为空，返回空摘要
+            if not conversation_turns:
+                return ""
+                
+            # 格式化对话，准备输入给LLM
+            formatted_conversation = "\n".join([
+                f"{'用户' if turn.get('is_user') else '助手'}: {turn.get('content', '')}" 
+                for turn in conversation_turns
+            ])
+            
+            # 构建提示词
+            system_prompt = "你是一个专业的对话摘要生成器。你的任务是为对话历史生成简短、信息丰富的摘要。"
+            prompt = f"""请为以下对话历史生成一个简短的摘要（150字以内）。
+            
+                        对话历史:
+                        {formatted_conversation}
+
+                        要求:
+                        1. 摘要应包含对话中的主要主题、关键问题和重要结论
+                        2. 保持客观，不添加原对话中没有的信息
+                        3. 简明扼要，控制在150字以内
+                        4. 使用第三人称，例如"用户询问了..."，"助手解释了..."
+
+                        对话摘要:"""
+
+            # 调用LLM生成摘要
+            response = self.llm_client.generate_text(
+                prompt=prompt, 
+                system_prompt=system_prompt, 
+                task_type="conversation_summary"
+            )
+            
+            summary = response.get('text', '').strip()
+            if not summary:
+                # 如果摘要生成失败，返回一个简单的默认描述
+                return f"早先的对话包含了{len(conversation_turns)}轮交流。"
+                
+            return summary
+            
+        except Exception as e:
+            logger.exception(f"生成对话摘要失败: {e}")
+            # 出错时返回简单描述
+            return f"早先的对话包含了{len(conversation_turns)}轮交流。"
 
 def initialize_ai_services():
     """初始化所有AI服务相关组件"""

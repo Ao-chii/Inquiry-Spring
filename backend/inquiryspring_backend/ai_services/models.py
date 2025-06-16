@@ -78,9 +78,19 @@ class AITaskLog(models.Model):
     """AI任务日志"""
     
     TASK_TYPES = [
-        ('quiz', '测验生成'),
+        # 主要任务
         ('chat', '智能对话'),
-        ('summary', '文档总结')
+        ('quiz', '测验生成'),
+        ('summary', '文档总结'),
+        
+        # 内部子任务，用于更精细的日志记录
+        ('query_rewrite', '查询重写'),
+        ('conversation_summary', '对话历史摘要'),
+        
+        # 结构化输出修复任务
+        ('chat_fix', '聊天输出修复'),
+        ('quiz_fix', '测验输出修复'),
+        ('summary_fix', '摘要输出修复'),
     ]
     
     STATUS_CHOICES = [
