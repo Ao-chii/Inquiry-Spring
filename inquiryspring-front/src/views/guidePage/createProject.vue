@@ -56,7 +56,7 @@
           
           <el-form ref="projectForm" :model="projectForm" label-width="100px">
             <!-- 项目名称输入 -->
-            <el-form-item label="项目名称" prop="name" required>
+            <el-form-item label="项目名称" prop="name">
               <el-input 
                 v-model="projectForm.name" 
                 placeholder="输入项目名称"
@@ -77,25 +77,6 @@
                 show-word-limit>
               </el-input>
             </el-form-item>
-
-            <!-- 文件上传区域 -->
-            <!-- <el-form-item label="上传资料">
-              <el-tooltip content="上传相关文件作为学习项目的知识库" placement="right">
-                <i class="el-icon-question" style="color: #8b7355; font-size: 16px;"></i>
-              </el-tooltip>
-              <el-upload
-                class="upload-demo"
-                drag
-                :action="this.uploadUrl"
-                multiple
-                :on-success="handleUploadSuccess"
-                :before-upload="beforeUpload"
-                style="width: 80%;">
-                <i class="el-icon-upload" style="color: #8b7355; font-size: 48px;"></i>
-                <div class="el-upload__text" style="color: #5a4a3a;">将文件拖到此处，或<em style="color: #8b7355;">点击上传</em></div>
-                <div class="el-upload__tip" slot="tip" style="color: #8b7355;">支持word/pdf/txt格式</div>
-              </el-upload>
-            </el-form-item> -->
 
             <!-- 提交按钮 -->
             <el-form-item>
@@ -132,6 +113,7 @@
                 multiple
                 :on-success="handleUploadSuccess"
                 :before-upload="beforeUpload"
+                :show-file-list="false"
                 style="width: 100%;">
                 <i class="el-icon-upload" style="color: #8b7355; font-size: 48px;"></i>
                 <div class="el-upload__text" style="color: #5a4a3a;">将文件拖到此处，或<em style="color: #8b7355;">点击上传</em></div>
@@ -148,7 +130,7 @@
                 <el-table-column
                   prop="name"
                   label="文档名称"
-                  width="180">
+                  width="580">
                 </el-table-column>
                 <el-table-column
                   prop="size"
@@ -193,7 +175,7 @@
             <el-table-column
               prop="name"
               label="项目名称"
-              width="180">
+              width="280">
             </el-table-column>
             <el-table-column
               prop="description"
@@ -206,7 +188,7 @@
             </el-table-column>
             <el-table-column
               label="操作"
-              width="180">
+              width="280">
               <template #default="scope">
                 <el-button 
                   @click="openProject(scope.row)" 
@@ -219,6 +201,12 @@
                   type="text" 
                   style="color: #8b7355;">
                   管理文档
+                </el-button>
+                <el-button 
+                  @click="deleteProject(scope.row)" 
+                  type="text" 
+                  style="color: #f56c6c; font-weight: bold;">
+                  删除
                 </el-button>
               </template>
             </el-table-column>
@@ -251,21 +239,7 @@ export default {
         files: []
       },
       // 项目列表数据
-      projects: [
-        // 示例数据
-        {
-          id: 1,
-          name: '机器学习入门',
-          description: '学习机器学习基础知识',
-          createTime: '2025-05-15'
-        },
-        {
-          id: 2,
-          name: 'Vue3高级教程',
-          description: '深入学习Vue3框架',
-          createTime: '2025-05-20'
-        }
-      ],
+      projects: [],
       isSubmitting: false
     }
   },
@@ -305,33 +279,53 @@ export default {
     },
     // 文件上传成功处理
     handleUploadSuccess(response, file) {
-      this.projectForm.files.push({
-        name: file.name,
-        url: response.url
-      });
-      this.$message.success(`${file.name} 上传成功`);
+      if (response.data && response.data.document_id) {
+        // 上传成功后将文档加入当前项目文档列表
+        if (this.currentProject && Array.isArray(this.currentProject.documents)) {
+          this.currentProject.documents.push({
+            name: response.data.filename,
+            size: file.size ? Math.round(file.size / 1024) + 'KB' : '未知',
+            uploadTime: new Date().toLocaleString(),
+            url: response.data.url
+          });
+        }
+        this.$message.success(`${file.name} 上传成功`);
+      } else {
+        this.$message.error(response?.error || `${file.name} 上传失败`);
+      }
     },
     // 提交项目表单
     submitProject() {
       this.isSubmitting = true;
-      // 这里应该是调用API创建项目的逻辑
-      // 模拟API调用
-      setTimeout(() => {
-        this.projects.unshift({
-          id: Date.now(),
-          name: this.projectForm.name,
-          description: this.projectForm.description,
-          createTime: new Date().toLocaleDateString()
+      // 构造请求数据，包含用户名
+      const payload = {
+        name: this.projectForm.name,
+        description: this.projectForm.description,
+        username: this.username // 传递当前登录用户名
+      };
+      axios.post(this.url, payload, {
+        withCredentials: true // 携带cookie/session认证
+      })
+        .then(res => {
+          if (res.data && res.data.data.project) {
+            this.projects.unshift({
+              id: res.data.data.project.id,
+              name: res.data.data.project.name,
+              description: res.data.data.project.description,
+              createTime: res.data.data.project.createTime
+            });
+            this.$message.success('项目创建成功');
+            this.projectForm = { name: '', description: '', files: [] };
+          } else {
+            this.$message.error(res.data.error || '项目创建失败');
+          }
+        })
+        .catch(err => {
+          this.$message.error(err.response?.data?.data.error || '项目创建失败,err');
+        })
+        .finally(() => {
+          this.isSubmitting = false;
         });
-        
-        this.$message.success('项目创建成功');
-        this.projectForm = {
-          name: '',
-          description: '',
-          files: []
-        };
-        this.isSubmitting = false;
-      }, 3000);
     },
     // 打开项目
     openProject(row) {
@@ -346,20 +340,6 @@ export default {
     // 退出登录
     async unlog() {
       this.$router.push('/');
-      // try {
-      //   await axios.post('/api/logout/', {}, {
-      //     withCredentials: true,
-      //     headers: {
-      //       'Content-Type': 'application/json',
-      //     }
-      //   });
-      //   await this.$store.dispatch('logout');
-      //   this.$message.success('退出成功');
-      //   this.$router.push('/');
-      // } catch (error) {
-      //   console.error('退出失败:', error);
-      //   this.$message.error('退出失败，请重试');
-      // }
     },
     // 显示文档管理对话框
     showManageDialog(project) {
@@ -405,9 +385,80 @@ export default {
         }
       }
     },
+    // 获取用户所有项目
+    fetchUserProjects() {
+      axios.get(this.url, {
+        params: { username: this.username },
+        withCredentials: true
+      })
+        .then(res => {
+          if (Array.isArray(res.data.data)) {
+            this.projects = res.data.data;
+          } else {
+            this.projects = [];
+          }
+        })
+        .catch(() => {
+          this.projects = [];
+        });
+    },
 
     gotoTaskManage() {
       this.$router.push({ path: '/manage' });
+    },
+
+    deleteProject(row) {
+      this.$confirm(`确定要删除项目“${row.name}”吗？此操作不可恢复！`, '警告', {
+        confirmButtonText: '确定',
+        cancelButtonText: '取消',
+        type: 'warning'
+      }).then(() => {
+        axios.post(this.HOST + `/projects/${row.id}/deleteProject/`, {}, {
+          withCredentials: true
+        }).then(res => {
+          const data = res.data && res.data.data ? res.data.data : res.data;
+          if (data && data.success) {
+            this.$message.success('项目删除成功');
+            this.projects = this.projects.filter(p => p.id !== row.id);
+          } else {
+            this.$message.error(data.error || '删除失败');
+          }
+        }).catch(err => {
+          this.$message.error(err.response?.data?.error || '删除失败');
+        });
+      }).catch(() => {
+        this.$message.info('已取消删除');
+      });
+    },
+
+    deleteDocument(row) {
+      if (!this.currentProject || !this.currentProject.id) {
+        this.$message.error('未找到当前项目');
+        return;
+      }
+      this.$confirm(`确定要删除文档“${row.name}”吗？此操作不可恢复！`, '警告', {
+        confirmButtonText: '确定',
+        cancelButtonText: '取消',
+        type: 'warning'
+      }).then(() => {
+        axios.post(this.HOST + `/projects/${this.currentProject.id}/documents/deleteDocument`, {
+          filename: row.name
+        }, {
+          withCredentials: true
+        }).then(res => {
+          const data = res.data && res.data.data ? res.data.data : res.data;
+          if (data && data.success) {
+            this.$message.success('文档删除成功');
+            this.currentProject.documents = this.currentProject.documents.filter(d => d.name !== row.name);
+          } else {
+            this.$message.error(data.error || '删除失败');
+          }
+        }).catch(err => {
+          this.$message.error(err.response?.data?.error || '删除失败');
+        });
+      }).catch(() => {
+        this.$message.info('已取消删除');
+      });
     },
   },
   
@@ -425,6 +476,7 @@ export default {
     // 组件创建时检查登录状态
     await this.$nextTick();
     await this.checkLoginStatus();
+    this.fetchUserProjects(); // 页面加载后调用
   }
 }
 </script>
