@@ -32,14 +32,6 @@
                 <span>管理学习项目</span>
             </el-menu-item>
         </el-menu>
-        <!-- 学习计划卡片 -->
-        <div 
-            @click="gotoTaskManage" 
-            class="study-plan-card"
-        >
-            <i class="el-icon-date" style="color: #d48806"></i>
-            <span>我的学习计划</span>
-        </div>
         <!-- 用户信息展示 -->
         <div class="user-info" style="position: fixed; bottom: 0; left: 0; width: 240px; padding: 15px; border-top: 1px solid #e0d6c2; background: #f1e9dd;">
             <div style="display: flex; align-items: center; padding: 10px;">
@@ -57,8 +49,8 @@
     <el-container>
         <el-main style="padding: 20px; display: flex; flex-direction: column; height: 100%; background-color: rgba(255,255,255,0.7); border-radius: 16px; margin: 20px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); border: 1px solid rgba(139, 115, 85, 0.1)">
             <div class="content-container" style="flex: 1; display: flex; flex-direction: column; gap: 30px;">
-                <el-col style="padding: 30px; background: rgba(255,255,255,0.9); border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); display: flex; gap: 10px;">
-                    <div style="flex: 1; padding: 10px;">
+                <el-col style="width: 1000px; padding: 30px; background: rgba(255,255,255,0.9); border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); display: flex; gap: 10px;">
+                    <!-- <div style="flex: 1; padding: 10px;">
                         <h3 style="margin-bottom: 15px; display: flex; align-items: center; gap: 5px;">
                             上传文件
                             <el-tooltip content="将根据上传的学习材料生成测试题目" placement="right">
@@ -74,7 +66,7 @@
                         <div class="el-upload__text" style="color: #5a4a3a;">将文件拖到此处，或<em style="color: #8b7355;">点击上传</em></div>
                         <div class="el-upload__tip" slot="tip" style="color: #8b7355;">支持word,pdf格式</div>
                         </el-upload>
-                    </div>
+                    </div> -->
                     <div style="flex: 1; padding: 15px;">
                         <h3 style="margin-bottom: 15px; display: flex; align-items: center; gap: 5px;">
                             测试设置
@@ -282,29 +274,6 @@
         0%, 80%, 100% { transform: scale(1); }
         40% { transform: scale(1.5); }
     }
-
-    .study-plan-card {
-        margin: 24px 8px 0 8px;
-        width: calc(100% - 16px);
-        border-radius: 8px;
-        background: #fff7e6;
-        color: #d48806;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        cursor: pointer;
-        font-size: 15px;
-        font-weight: 500;
-        gap: 8px;
-        box-shadow: 0 2px 8px rgba(212,136,6,0.08);
-        padding: 12px 0;
-        transition: background 0.2s, transform 0.18s, box-shadow 0.18s;
-    }
-    .study-plan-card:hover {
-        background: #ffe7ba;
-        transform: scale(1.045);
-        box-shadow: 0 6px 18px rgba(212,136,6,0.18);
-    }
 </style>
 
 <script>
@@ -381,8 +350,15 @@ export default {
         }
     },
     created() {
+        // 检查localStorage中是否有用户信息
+        const userInfo = localStorage.getItem('userInfo');
+        // 将JSON字符串转换为对象
+        const parsedUserInfo = JSON.parse(userInfo);
+        // 触发Vuex action来更新store中的用户信息
+        this.$store.dispatch('restoreUserInfo', parsedUserInfo);
+
         // 获取当前用户信息
-        const user = this.$store.getters.getCurrentUser;
+        const user = this.$store.getters.getUserInfo;
         if (user && user.username) {
             this.username = user.username;
             this.userInitial = user.username.charAt(0).toUpperCase();
@@ -400,9 +376,6 @@ export default {
         },
         gotoPrj(){
             this.$router.push({ path: '/project' });
-        },
-        gotoTaskManage() {
-            this.$router.push({ path: '/manage' });
         },
         all () {
             this.panel = [...Array(this.items).keys()].map((k, i) => i)

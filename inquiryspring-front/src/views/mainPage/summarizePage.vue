@@ -33,14 +33,6 @@
                 <span>管理学习项目</span>
             </el-menu-item>
         </el-menu>
-        <!-- 学习计划卡片 -->
-        <div 
-            @click="gotoTaskManage" 
-            class="study-plan-card"
-        >
-            <i class="el-icon-date" style="color: #d48806"></i>
-            <span>我的学习计划</span>
-        </div>
         <!-- 用户信息展示 -->
         <div class="user-info" style="position: fixed; bottom: 0; left: 0; width: 240px; padding: 15px; border-top: 1px solid #e0d6c2; background: #f1e9dd;">
             <div style="display: flex; align-items: center; padding: 10px;">
@@ -267,29 +259,6 @@
   0%, 80%, 100% { transform: scale(0.7); opacity: 0.5; }
   40% { transform: scale(1.2); opacity: 1; }
 }
-
-.study-plan-card {
-    margin: 24px 8px 0 8px;
-    width: calc(100% - 16px);
-    border-radius: 8px;
-    background: #fff7e6;
-    color: #d48806;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    cursor: pointer;
-    font-size: 15px;
-    font-weight: 500;
-    gap: 8px;
-    box-shadow: 0 2px 8px rgba(212,136,6,0.08);
-    padding: 12px 0;
-    transition: background 0.2s, transform 0.18s, box-shadow 0.18s;
-}
-.study-plan-card:hover {
-    background: #ffe7ba;
-    transform: scale(1.045);
-    box-shadow: 0 6px 18px rgba(212,136,6,0.18);
-}
 </style>
 
 <script>
@@ -322,8 +291,15 @@ export default {
         }
     },
     created() {
+        // 检查localStorage中是否有用户信息
+        const userInfo = localStorage.getItem('userInfo');
+        // 将JSON字符串转换为对象
+        const parsedUserInfo = JSON.parse(userInfo);
+        // 触发Vuex action来更新store中的用户信息
+        this.$store.dispatch('restoreUserInfo', parsedUserInfo);
+
         // 获取当前用户信息
-        const user = this.$store.getters.getCurrentUser;
+        const user = this.$store.getters.getUserInfo;
         if (user && user.username) {
             this.username = user.username;
             this.userInitial = user.username.charAt(0).toUpperCase();
@@ -376,9 +352,6 @@ export default {
         },
         gotoPrj(){
             this.$router.push({ path: '/project' });
-        },
-        gotoTaskManage() {
-            this.$router.push({ path: '/manage' });
         },
 
         // 上传文件前的校验
