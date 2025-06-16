@@ -1,4 +1,5 @@
 import logging
+import os
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from rest_framework import status
@@ -18,7 +19,16 @@ def project_list(request):
     """项目列表"""
     if request.method == 'GET':
         try:
-            projects = Project.objects.filter(is_active=True).order_by('-created_at')
+            username = request.GET.get('username', '').strip()
+            if username:
+                from django.contrib.auth.models import User
+                try:
+                    user = User.objects.get(username=username)
+                except User.DoesNotExist:
+                    return Response([], status=status.HTTP_200_OK)
+                projects = Project.objects.filter(is_active=True, user=user).order_by('-created_at')
+            else:
+                projects = Project.objects.filter(is_active=True).order_by('-created_at')
             project_list = []
 
             for project in projects:
@@ -26,7 +36,7 @@ def project_list(request):
                 documents = []
                 for proj_doc in project.documents.all():
                     doc = proj_doc.document
-                    if doc.is_processed:
+                    if hasattr(doc, 'is_processed') and doc.is_processed:
                         documents.append({
                             'name': doc.title,
                             'size': f"{doc.file_size // 1024}KB" if doc.file_size else "未知",
@@ -56,34 +66,37 @@ def project_list(request):
             data = request.data
             name = data.get('name', '').strip()
             description = data.get('description', '').strip()
-            
+            username = data.get('username', '').strip()
             if not name:
                 return Response({'error': '项目名称不能为空'}, status=status.HTTP_400_BAD_REQUEST)
-            
-            # 创建项目
+            if not username:
+                return Response({'error': '用户名不能为空'}, status=status.HTTP_400_BAD_REQUEST)
+            # 根据用户名查找用户
+            from django.contrib.auth.models import User
+            try:
+                user = User.objects.get(username=username)
+            except User.DoesNotExist:
+                return Response({'error': '用户不存在'}, status=status.HTTP_404_NOT_FOUND)
+            # 创建项目并关联用户
             project = Project.objects.create(
                 name=name,
-                description=description
+                description=description,
+                user=user
             )
-            
-            # 创建统计记录
             ProjectStats.objects.create(project=project)
-            
-            logger.info(f"项目创建成功: {name}")
-            
-            # 返回前端期望的格式
+            # 返回前端所需的项目详细数据
             return Response({
                 'message': '项目创建成功',
                 'project': {
                     'id': project.id,
                     'name': project.name,
                     'description': project.description,
-                    'createTime': project.created_at.strftime('%Y-%m-%d'),  # 前端期望的时间格式
-                    'documents': []  # 新项目没有文档
+                    'createTime': project.created_at.strftime('%Y-%m-%d'),
+                    'documents': []
                 },
                 'success': True
             }, status=status.HTTP_201_CREATED)
-            
+
         except Exception as e:
             logger.error(f"创建项目失败: {e}")
             return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -226,40 +239,53 @@ def project_add_document(request, project_id):
 
 
 @csrf_exempt
-@api_view(['GET', 'POST', 'OPTIONS'])
+@api_view(['POST'])
 def project_upload_document(request, project_id):
-    """为项目上传文档 - 支持大整数ID的测试版本"""
-
-    # 强制输出调试信息
-    print(f"=== 函数被调用 ===")
-    print(f"Method: {request.method}")
-    print(f"Project ID: {project_id} (type: {type(project_id)})")
-    print(f"Path: {request.path}")
-    print(f"User: {request.user}")
-    print(f"Headers: {dict(request.headers)}")
-    print(f"=== 调试信息结束 ===")
-
-    # 转换project_id为整数（如果是字符串）
+    """为项目上传文档并存储到数据库，保存文件并建立项目-文档关联，接口与el-upload兼容"""
+    from ..documents.models import Document
+    from django.conf import settings
     try:
-        project_id_int = int(project_id)
-    except (ValueError, TypeError):
+        project = get_object_or_404(Project, id=project_id, is_active=True)
+        if 'file' not in request.FILES:
+            return Response({'error': '没有选择文件'}, status=status.HTTP_400_BAD_REQUEST)
+        file = request.FILES['file']
+        if file.name == '':
+            return Response({'error': '没有选择文件'}, status=status.HTTP_400_BAD_REQUEST)
+        # 直接用Django FileField保存文件，避免手动赋值filename
+        document = Document.objects.create(
+            title=file.name,
+            file=file,
+            file_size=file.size,
+            uploaded_at=timezone.now(),
+            is_processed=True  # 可根据实际处理流程调整
+        )
+        # 建立项目与文档的关联
+        ProjectDocument.objects.create(
+            project=project,
+            document=document,
+            is_primary=False
+        )
+        # 更新统计
+        try:
+            stats = project.stats
+            stats.total_documents = project.documents.count()
+            stats.save()
+        except ProjectStats.DoesNotExist:
+            ProjectStats.objects.create(
+                project=project,
+                total_documents=project.documents.count()
+            )
+        # 返回文件url
+        url = document.file.url if hasattr(document.file, 'url') else ''
         return Response({
-            'error': f'无效的项目ID: {project_id}',
-            'project_id': project_id
-        }, status=400)
-
-    # 立即返回成功响应，不做任何复杂处理
-    return Response({
-        'message': '测试成功 - 函数被正确调用',
-        'method': request.method,
-        'project_id': project_id,
-        'project_id_int': project_id_int,
-        'path': request.path,
-        'timestamp': str(timezone.now()),
-        'success': True
-    }, status=200)
-
-
+            'message': '文档上传并关联成功',
+            'document_id': document.id,
+            'filename': file.name,
+            'url': url
+        })
+    except Exception as e:
+        logger.error(f"项目上传文档失败: {e}")
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 @csrf_exempt
@@ -503,3 +529,72 @@ def test_project_upload(request, project_id):
         'user': str(request.user),
         'files': list(request.FILES.keys()) if request.FILES else []
     })
+
+
+@api_view(['POST'])
+def delete_project(request, project_id):
+    """级联删除项目及其所有相关文档信息"""
+    try:
+        project = get_object_or_404(Project, id=project_id, is_active=True)
+        # 级联删除所有项目-文档关联
+        project_docs = ProjectDocument.objects.filter(project=project)
+        doc_ids = [pd.document.id for pd in project_docs]
+        # 删除项目-文档关联
+        project_docs.delete()
+        # 删除文档（如有需要，可只删除未被其他项目引用的文档）
+        from ..documents.models import Document
+        for doc_id in doc_ids:
+            # 检查该文档是否还被其他项目引用
+            if not ProjectDocument.objects.filter(document_id=doc_id).exists():
+                try:
+                    doc = Document.objects.get(id=doc_id)
+                    # 删除文件
+                    if doc.file and hasattr(doc.file, 'path') and os.path.exists(doc.file.path):
+                        os.remove(doc.file.path)
+                    doc.delete()
+                except Exception:
+                    pass
+        # 删除项目统计
+        ProjectStats.objects.filter(project=project).delete()
+        # 删除项目本身
+        project.delete()
+        return Response({'success': True, 'message': '项目及相关文档已删除'})
+    except Exception as e:
+        logger.error(f"级联删除项目失败: {e}")
+        return Response({'success': False, 'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['POST'])
+def delete_document(request, project_id):
+    """级联删除项目下指定文档及其所有相关信息"""
+    try:
+        filename = request.data.get('filename')
+        if not filename:
+            return Response({'success': False, 'error': '缺少文档名称'}, status=status.HTTP_400_BAD_REQUEST)
+        project = get_object_or_404(Project, id=project_id, is_active=True)
+        # 找到对应的文档对象
+        proj_doc = ProjectDocument.objects.filter(project=project, document__title=filename).first()
+        if not proj_doc:
+            return Response({'success': False, 'error': '未找到该文档'}, status=status.HTTP_404_NOT_FOUND)
+        doc = proj_doc.document
+        # 删除项目-文档关联
+        proj_doc.delete()
+        # 如果该文档未被其他项目引用，则删除文档及其文件
+        if not ProjectDocument.objects.filter(document=doc).exists():
+            try:
+                if doc.file and hasattr(doc.file, 'path') and os.path.exists(doc.file.path):
+                    os.remove(doc.file.path)
+                doc.delete()
+            except Exception:
+                pass
+        # 更新项目统计
+        try:
+            stats = project.stats
+            stats.total_documents = project.documents.count()
+            stats.save()
+        except ProjectStats.DoesNotExist:
+            pass
+        return Response({'success': True, 'message': '文档及相关信息已删除'})
+    except Exception as e:
+        logger.error(f"级联删除文档失败: {e}")
+        return Response({'success': False, 'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

@@ -13,6 +13,12 @@ urlpatterns = [
     # 使用str类型避免整数范围限制
     path('<str:project_id>/documents/', views.project_upload_document, name='project_upload_document'),
 
+    # 项目文档删除
+    path('<str:project_id>/documents/deleteDocument', views.delete_document, name='delete_document'),
+
+    # 项目级联删除
+    path('<str:project_id>/deleteProject/', views.delete_project, name='delete_project'),
+
     # 项目详情 - 前端可能需要
     path('<str:project_id>/', views.project_detail, name='project_detail'),
 
