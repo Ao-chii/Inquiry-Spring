@@ -164,11 +164,17 @@ export default {
               // 直接使用表单中的用户名
               const username = this.loginForm.username;
               console.log('使用表单用户名:', username);
+
+              const userInfo = {
+                username: username,
+                isLoggedIn: true,
+              };
+
+              // 将用户信息存储到localStorage
+              localStorage.setItem('userInfo', JSON.stringify(userInfo));
               
               // 更新Vuex store中的用户信息
-              await this.$store.dispatch('updateUserInfo', {
-                username: username
-              });
+              await this.$store.dispatch('loginSuccess', userInfo);
               
               // 验证store是否更新成功
               const storeUsername = this.$store.getters.getUsername;

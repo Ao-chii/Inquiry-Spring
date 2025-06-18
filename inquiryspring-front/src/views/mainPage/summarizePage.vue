@@ -33,6 +33,18 @@
                 <span>管理学习项目</span>
             </el-menu-item>
         </el-menu>
+        <!-- 用户信息展示 -->
+        <div class="user-info" style="position: fixed; bottom: 0; left: 0; width: 240px; padding: 15px; border-top: 1px solid #e0d6c2; background: #f1e9dd;">
+            <div style="display: flex; align-items: center; padding: 10px;">
+                <el-avatar :size="40" style="background: #8b7355; margin-right: 10px;">
+                    {{ userInitial }}
+                </el-avatar>
+                <div>
+                    <div style="color: #5a4a3a; font-weight: bold; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 150px;">{{ username }}</div>
+                    <div style="color: #8b7355; font-size: 12px;">已登录</div>
+                </div>
+            </div>
+        </div>
     </el-aside>
     
     <el-container>
@@ -273,7 +285,27 @@ export default {
             uploadedFiles: [{ name: "ccf2012-b.pdf" }], // 新增：已上传文件列表
             // currentFiles:["Big_Data_Quality_A_Survey.pdf"],
             selectedFileRow: null, // 新增：当前选中的文件行对象
-            selectedFileName: '' // 新增：当前选中文件名
+            selectedFileName: '', // 新增：当前选中文件名
+            username: '',
+            userInitial: '',
+        }
+    },
+    created() {
+        // 检查localStorage中是否有用户信息
+        const userInfo = localStorage.getItem('userInfo');
+        // 将JSON字符串转换为对象
+        const parsedUserInfo = JSON.parse(userInfo);
+        // 触发Vuex action来更新store中的用户信息
+        this.$store.dispatch('restoreUserInfo', parsedUserInfo);
+
+        // 获取当前用户信息
+        const user = this.$store.getters.getUserInfo;
+        if (user && user.username) {
+            this.username = user.username;
+            this.userInitial = user.username.charAt(0).toUpperCase();
+        } else {
+            this.username = '未登录';
+            this.userInitial = '?';
         }
     },
     mounted() {

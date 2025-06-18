@@ -32,13 +32,25 @@
                 <span>管理学习项目</span>
             </el-menu-item>
         </el-menu>
+        <!-- 用户信息展示 -->
+        <div class="user-info" style="position: fixed; bottom: 0; left: 0; width: 240px; padding: 15px; border-top: 1px solid #e0d6c2; background: #f1e9dd;">
+            <div style="display: flex; align-items: center; padding: 10px;">
+                <el-avatar :size="40" style="background: #8b7355; margin-right: 10px;">
+                    {{ userInitial }}
+                </el-avatar>
+                <div>
+                    <div style="color: #5a4a3a; font-weight: bold; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 150px;">{{ username }}</div>
+                    <div style="color: #8b7355; font-size: 12px;">已登录</div>
+                </div>
+            </div>
+        </div>
     </el-aside>
     
     <el-container>
         <el-main style="padding: 20px; display: flex; flex-direction: column; height: 100%; background-color: rgba(255,255,255,0.7); border-radius: 16px; margin: 20px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); border: 1px solid rgba(139, 115, 85, 0.1)">
             <div class="content-container" style="flex: 1; display: flex; flex-direction: column; gap: 30px;">
-                <el-col style="padding: 30px; background: rgba(255,255,255,0.9); border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); display: flex; gap: 10px;">
-                    <div style="flex: 1; padding: 10px;">
+                <el-col style="width: 1000px; padding: 30px; background: rgba(255,255,255,0.9); border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); display: flex; gap: 10px;">
+                    <!-- <div style="flex: 1; padding: 10px;">
                         <h3 style="margin-bottom: 15px; display: flex; align-items: center; gap: 5px;">
                             上传文件
                             <el-tooltip content="将根据上传的学习材料生成测试题目" placement="right">
@@ -54,7 +66,7 @@
                         <div class="el-upload__text" style="color: #5a4a3a;">将文件拖到此处，或<em style="color: #8b7355;">点击上传</em></div>
                         <div class="el-upload__tip" slot="tip" style="color: #8b7355;">支持word,pdf格式</div>
                         </el-upload>
-                    </div>
+                    </div> -->
                     <div style="flex: 1; padding: 15px;">
                         <h3 style="margin-bottom: 15px; display: flex; align-items: center; gap: 5px;">
                             测试设置
@@ -138,30 +150,30 @@
                                 <span v-if="question[i]?.type==='单选题'">
                                     <el-select v-model="answer[i]" placeholder="请选择" style="margin-top: 15px;">
                                         <el-option
-                                        v-for="item in options"
-                                        :key="item.value"
-                                        :label="item.label"
-                                        :value="item.value">
+                                        v-for="(option, index) in question[i]?.options || []"
+                                        :key="index"
+                                        :label="option"
+                                        :value="getOptionValue(option, index)">
                                         </el-option>
                                     </el-select>
                                 </span>
                                 <span v-else-if="question[i]?.type==='多选题'">
                                     <el-select v-model="answer[i]" multiple placeholder="请选择" style="margin-top: 15px;">
                                         <el-option
-                                        v-for="item in options"
-                                        :key="item.value"
-                                        :label="item.label"
-                                        :value="item.value">
+                                        v-for="(option, index) in question[i]?.options || []"
+                                        :key="index"
+                                        :label="option"
+                                        :value="getOptionValue(option, index)">
                                         </el-option>
                                     </el-select>
                                 </span>
                                 <span v-else-if="question[i]?.type==='判断题'">
                                     <el-select v-model="answer[i]" placeholder="请选择" style="margin-top: 15px;">
                                         <el-option
-                                        v-for="item in options_2"
-                                        :key="item.value"
-                                        :label="item.label"
-                                        :value="item.value">
+                                        v-for="(option, index) in question[i]?.options || ['正确', '错误']"
+                                        :key="index"
+                                        :label="option"
+                                        :value="option">
                                         </el-option>
                                     </el-select>
                                 </span>
@@ -332,7 +344,27 @@ export default {
             answer: [], // 初始化答案数组
             answerStatus: [], // 答案正误状态
             showAnalysis: [], // 控制每题解析显示
-            loading: false // 是否显示加载动画
+            loading: false, // 是否显示加载动画
+            username: '',
+            userInitial: '',
+        }
+    },
+    created() {
+        // 检查localStorage中是否有用户信息
+        const userInfo = localStorage.getItem('userInfo');
+        // 将JSON字符串转换为对象
+        const parsedUserInfo = JSON.parse(userInfo);
+        // 触发Vuex action来更新store中的用户信息
+        this.$store.dispatch('restoreUserInfo', parsedUserInfo);
+
+        // 获取当前用户信息
+        const user = this.$store.getters.getUserInfo;
+        if (user && user.username) {
+            this.username = user.username;
+            this.userInitial = user.username.charAt(0).toUpperCase();
+        } else {
+            this.username = '未登录';
+            this.userInitial = '?';
         }
     },
     methods: {
@@ -408,6 +440,14 @@ export default {
         getAnalysis() {
             // 显示所有题目的解析
             this.showAnalysis = this.question.map(() => true);
+        },
+        getOptionValue(option, index) {
+            // 从选项文本中提取值，如果选项以"A. "开头，返回"A"，否则返回选项本身
+            if (typeof option === 'string' && option.match(/^[A-Z]\.\s/)) {
+                return option.charAt(0);
+            }
+            // 对于没有字母前缀的选项，使用字母索引
+            return String.fromCharCode(65 + index); // A, B, C, D...
         },
         markMessage(message) {
             if (!message) return '';

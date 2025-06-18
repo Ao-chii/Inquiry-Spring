@@ -22,6 +22,7 @@ class LLMClientFactory:
         """
         创建LLM客户端
         
+        
         Args:
             model_id: 模型ID，如果提供则直接使用该ID查找模型
             provider: 提供商名称，如果model_id未提供，则使用provider查找默认模型
@@ -76,7 +77,7 @@ class BaseLLMClient:
     def __init__(self, model_config: Optional[AIModel]):
         self.model_config = model_config
         self.model_id = model_config.model_id if model_config else "gemini-2.5-flash-preview-05-20"
-        self.max_tokens = model_config.max_tokens if model_config else 1000
+        self.max_tokens = model_config.max_tokens if model_config else 10000  # 增加默认token限制用于文档总结
         self.temperature = model_config.temperature if model_config else 0.7
         
         # 设置API密钥和基础URL

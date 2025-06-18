@@ -2,16 +2,15 @@
 """
 InquirySpring Backend 初始化脚本
 """
-import os
-import sys
 import django
 from django.core.management import execute_from_command_line
 
 def main():
     """初始化Django后端"""
     print("🔧 初始化InquirySpring Django后端...")
-    
+
     # 设置Django设置模块
+    import os
     os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'inquiryspring_backend.settings')
     
     try:
@@ -37,13 +36,32 @@ def main():
         
         # 检查AI服务
         try:
-            from inquiryspring_backend.ai_service_wrapper import ai_service
-            status = ai_service.get_status()
-            print(f"🤖 AI服务状态: {status['status']}")
-            if not status['api_key_configured']:
+            from inquiryspring_backend.ai_services.llm_client import LLMClient
+            llm_client = LLMClient()
+
+            # 检查API密钥配置
+            import os
+            api_key = os.getenv('GOOGLE_API_KEY')
+            if api_key:
+                print("🤖 AI服务状态: 已配置")
+                print("✅ Google API密钥已设置")
+
+                # 尝试测试连接
+                try:
+                    test_response = llm_client.generate_response("测试连接", max_tokens=10)
+                    if test_response:
+                        print("✅ AI服务连接正常")
+                    else:
+                        print("⚠️  AI服务连接可能有问题")
+                except Exception as test_e:
+                    print(f"⚠️  AI服务测试失败: {test_e}")
+            else:
+                print("🤖 AI服务状态: 未配置")
                 print("💡 提示: 在.env文件中设置GOOGLE_API_KEY以启用AI功能")
+
         except Exception as e:
             print(f"⚠️  AI服务检查失败: {e}")
+            print("💡 提示: 确保ai_services模块正确安装")
         
         print("=" * 50)
         print("✅ 后端初始化完成！")
