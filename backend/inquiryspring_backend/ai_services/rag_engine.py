@@ -9,8 +9,10 @@ from typing import List, Dict, Any, Optional
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
-from langchain.retrievers import BM25Retriever, EnsembleRetriever, ContextualCompressionRetriever
-from langchain_community.document_compressors import CrossEncoderReranker
+from langchain_community.retrievers.bm25 import BM25Retriever
+from langchain.retrievers.ensemble import EnsembleRetriever
+from langchain.retrievers.contextual_compression import ContextualCompressionRetriever
+from langchain.retrievers.document_compressors import CrossEncoderReranker
 from langchain.schema import Document as LangchainDocument # Alias to avoid confusion
 
 # Model imports for reranking
@@ -28,8 +30,12 @@ from .structured_output import StructuredOutputProcessor, ChatResponse, Quiz as 
 
 logger = logging.getLogger(__name__)
 
+# 用户知识库存储目录
 VECTOR_STORE_DIR = os.path.join(settings.BASE_DIR, "vector_store")
+# 通用知识库存储目录
+GENERAL_KNOWLEDGE_DIR = os.path.join(settings.BASE_DIR, "general_knowledge")
 os.makedirs(VECTOR_STORE_DIR, exist_ok=True)
+os.makedirs(GENERAL_KNOWLEDGE_DIR, exist_ok=True)
 
 
 # ---- 全局嵌入模型单例 ----
@@ -99,6 +105,10 @@ class RAGEngine:
         else:
             self.output_processor = None
         
+        # 初始化通用知识库检索器
+        self.kb_retriever = None
+        self.init_general_knowledge_base()
+        
         if self.document and self.document.is_processed:
             self._initialize_retrievers()
 
@@ -125,20 +135,27 @@ class RAGEngine:
             'conversation_history': self._format_conversation_history(history)
         }
         
-        retrieved_chunks, has_doc_context = [], False
-        
+        # 使用混合检索获取上下文
+        retrieved_results = self.retrieve_with_hybrid_sources(rewritten_query)
+        has_context = bool(retrieved_results)
+
+        if has_context:
+            prompt_vars['reference_text'] = "\n\n---\n\n".join([r['content'] for r in retrieved_results])
+            
+            # 为LLM的溯源功能准备source信息
+            sources_for_prompt = []
+            for i, r in enumerate(retrieved_results):
+                source_info = {
+                    'id': i + 1,
+                    'type': r['source_type'],
+                    'title': r['document_title']
+                }
+                sources_for_prompt.append(source_info)
+            prompt_vars['sources_info'] = sources_for_prompt # 添加到prompt变量中
+
         # 获取聊天示例
         chat_examples = PromptManager._get_or_create_examples('chat')
-
-        # 使用重写后的查询进行检索，以提高多轮对话中的文档检索效果
-        if self.document:
-            retrieved_chunks = self.retrieve_relevant_chunks(rewritten_query)
-            if retrieved_chunks:
-                has_doc_context = True
-                prompt_vars['reference_text'] = "\n\n---\n\n".join([c.content for c in retrieved_chunks])
-                prompt_vars['chunk_ids'] = [c.id for c in retrieved_chunks]
-                prompt_vars['chunk_positions'] = [f"第{c.chunk_index+1}段" for c in retrieved_chunks]
-
+        
         # 使用支持JSON Schema的提示词渲染
         prompt = PromptManager.render_with_schema(
             'chat', 
@@ -147,7 +164,7 @@ class RAGEngine:
             examples=chat_examples
         )
             
-        system_prompt = "你是一个学习助手。请基于参考资料回答问题。" if has_doc_context else "你是一个学习助手。请清晰地回答问题。"
+        system_prompt = "你是一个学习助手。请基于参考资料回答问题。" if has_context else "你是一个学习助手。请清晰地回答问题。"
             
         llm_response = self.llm_client.generate_text(prompt=prompt, system_prompt=system_prompt, task_type="chat", **log_context)
         
@@ -167,26 +184,25 @@ class RAGEngine:
                     'answer': validated_response.answer,
                     'sources': validated_response.sources if validated_response.sources else [],
                     'processing_time': time.time() - start_time,
-                    'is_generic_answer': not has_doc_context,
+                    'is_generic_answer': not has_context,
                     'error': llm_response.get('error')
                 }
             except ValueError as e:
                 logger.warning(f"结构化输出验证失败: {str(e)}，回退到非结构化输出")
-                # 回退到非结构化输出处理
                 result = {
                     'answer': llm_response.get('text', '无法生成回答'),
-                    'sources': [{'id': c.id, 'content': c.content} for c in retrieved_chunks],
+                    'sources': retrieved_results, # 回退时返回原始检索结果
                     'processing_time': time.time() - start_time,
-                    'is_generic_answer': not has_doc_context,
+                    'is_generic_answer': not has_context,
                     'error': llm_response.get('error') or str(e)
                 }
         else:
             # 原始非结构化输出处理
             result = {
                 'answer': llm_response.get('text', '无法生成回答'),
-                'sources': [{'id': c.id, 'content': c.content} for c in retrieved_chunks],
+                'sources': retrieved_results, # 返回原始检索结果
                 'processing_time': time.time() - start_time,
-                'is_generic_answer': not has_doc_context,
+                'is_generic_answer': not has_context,
                 'error': llm_response.get('error')
             }
             
@@ -204,7 +220,9 @@ class RAGEngine:
     def handle_quiz(self, user_query: str, document_id: int = None, 
                     question_count: int = None, question_types: List[str] = None, difficulty: str = None, 
                     user: Any = None, session_id: str = None) -> Dict[str, Any]:
-        """统一处理测验生成请求。"""
+        """统一处理测验生成请求，并增强了结构化输出的健壮性。"""
+        start_time = time.time()
+        
         if document_id and (not self.document or self.document.id != document_id):
             self.__init__(document_id=document_id, llm_client=self.llm_client, config=self.config)
 
@@ -217,11 +235,82 @@ class RAGEngine:
             'question_count': question_count or constraints.get('question_count') or self.config['default_question_count'],
             'question_types': question_types or constraints.get('question_types') or self.config['default_question_types'],
             'difficulty': difficulty or constraints.get('difficulty') or self.config['default_difficulty'],
-            'user': user, 'session_id': session_id
         }
+        log_context = {'user': user, 'session_id': session_id, 'document': self.document}
         
-        generator = self._generate_quiz_with_doc if self.document else self._generate_quiz_without_doc
-        return generator(**params)
+        # 使用混合检索获取上下文
+        retrieved_results = self.retrieve_with_hybrid_sources(params['topic'])
+        
+        # 准备提示词变量
+        prompt_vars = {**params}
+        if retrieved_results:
+            prompt_vars['reference_text'] = "\n\n".join([r['content'] for r in retrieved_results])
+            source_types = {r['source_type'] for r in retrieved_results}
+            if 'document' in source_types and 'knowledge_base' in source_types:
+                prompt_vars['knowledge_source'] = "文档和通用知识库"
+            elif 'document' in source_types:
+                prompt_vars['knowledge_source'] = "文档"
+            else:
+                prompt_vars['knowledge_source'] = "通用知识库"
+        else:
+            logger.warning(f"在任何来源中都未找到与'{params['topic']}'相关的内容，将使用模型的固有知识")
+            prompt_vars['reference_text'] = ""
+
+        # 调用LLM生成测验
+        quiz_examples = PromptManager._get_or_create_examples('quiz')
+        prompt = PromptManager.render_with_schema('quiz', prompt_vars, output_schema=QuizModel, examples=quiz_examples)
+        system_prompt = "你是一个测验出题专家。请严格按照JSON Schema格式生成题目。"
+        llm_response = self.llm_client.generate_text(prompt, system_prompt=system_prompt, task_type='quiz', **log_context)
+        
+        # 结构化输出处理与健壮的回退机制
+        if self.output_processor and self.config.get('structured_output', True):
+            try:
+                # 验证并修复LLM输出
+                validated_response = self.output_processor.validate_and_fix(
+                    llm_response.get('text', ''), 
+                    QuizModel, 
+                    self.llm_client,
+                    task_type="quiz_fix",
+                    **log_context
+                )
+                
+                # 成功后，处理并保存测验数据
+                quiz_data = [q.model_dump() for q in validated_response.questions]
+                quiz_id = self._save_quiz_to_db(quiz_data, params['topic'], params['difficulty'])
+                
+                return {
+                    'quiz_id': quiz_id,
+                    'quiz_data': quiz_data,
+                    'processing_time': time.time() - start_time,
+                    'knowledge_source': prompt_vars.get('knowledge_source', '模型固有知识'),
+                    'error': None
+                }
+            except ValueError as e:
+                logger.error(f"测验结构化输出验证和修复失败: {str(e)}")
+                # 优雅回退：返回错误信息和原始文本，而不是尝试保存
+                return {
+                    'quiz_id': None,
+                    'quiz_data': [],
+                    'processing_time': time.time() - start_time,
+                    'knowledge_source': prompt_vars.get('knowledge_source', '模型固有知识'),
+                    'error': f"无法生成结构化的测验，请稍后重试。错误: {str(e)}",
+                    'raw_output': llm_response.get('text', '') # 包含原始输出，便于调试
+                }
+        
+        # 非结构化输出的传统路径
+        try:
+            quiz_data = self.output_processor._extract_and_parse_json(llm_response.get("text", "[]"))
+            quiz_id = self._save_quiz_to_db(quiz_data, params['topic'], params['difficulty'])
+            return {
+                'quiz_id': quiz_id,
+                'quiz_data': quiz_data,
+                'processing_time': time.time() - start_time,
+                'knowledge_source': prompt_vars.get('knowledge_source', '模型固有知识'),
+                'error': llm_response.get('error')
+            }
+        except Exception as e:
+            logger.error(f"处理非结构化测验数据时失败: {e}")
+            return {'error': "解析或保存测验失败", 'quiz_data': [], 'raw_output': llm_response.get('text', '')}
 
     def handle_summary(self, document_id: int, user: Any = None, session_id: str = None) -> Dict[str, Any]:
         """处理摘要生成请求（必须有文档）。"""
@@ -328,6 +417,114 @@ class RAGEngine:
             logger.exception(f"检索-重排流程失败 (查询: '{query}'): {e}")
             return []
 
+    def retrieve_with_hybrid_sources(self, query: str) -> List[Dict[str, Any]]:
+        """
+        统一检索接口，同时从用户文档和通用知识库检索内容，并进行统一排序。
+        支持混合检索模式，返回统一的检索结果格式。
+        
+        Args:
+            query: 查询文本
+            
+        Returns:
+            统一格式的混合检索结果列表，每项包含内容、来源类型和元数据
+        """
+        start_time = time.time()
+        unified_results = []
+        
+        # 并行检索两种来源（如果可用）
+        doc_chunks = []
+        if self.document and self.retriever:
+            doc_chunks = self.retrieve_relevant_chunks(query)
+        
+        kb_results = []
+        if self.kb_retriever:
+            kb_results = self.retrieve_from_knowledge_base(query)
+        
+        # 统一结果格式
+        # 1. 添加文档结果
+        for chunk in doc_chunks:
+            unified_results.append({
+                'content': chunk.content,
+                'source_type': 'document',
+                'source_id': chunk.id,
+                'document_title': self.document.title if self.document else None,
+                'chunk_index': chunk.chunk_index,
+                'metadata': {'chunk_id': str(chunk.id), 'document_id': str(self.document.id)}
+            })
+        
+        # 2. 添加知识库结果
+        for result in kb_results:
+            metadata = result.get('metadata', {})
+            unified_results.append({
+                'content': result['content'],
+                'source_type': 'knowledge_base',
+                'source_id': result['id'],
+                'document_title': metadata.get('title', '通用知识'),
+                'chunk_index': metadata.get('chunk_index', 0),
+                'metadata': metadata
+            })
+        
+        # 如果没有任何结果，返回空列表
+        if not unified_results:
+            return []
+        
+        # 混合重排序
+        reranked_results = self._rerank_hybrid_results(unified_results, query)
+        
+        logger.info(f"混合检索完成，耗时: {time.time() - start_time:.2f}秒，文档结果数: {len(doc_chunks)}，知识库结果数: {len(kb_results)}，重排后结果数: {len(reranked_results)}")
+        
+        return reranked_results
+    
+    def _rerank_hybrid_results(self, results: List[Dict[str, Any]], query: str) -> List[Dict[str, Any]]:
+        """
+        对混合来源的结果进行统一重排序
+        
+        Args:
+            results: 混合检索结果
+            query: 原始查询
+            
+        Returns:
+            重排序后的结果列表
+        """
+        if not results:
+            return []
+            
+        # 如果没有重排模型，直接返回原始结果（按原顺序）
+        if not _GLOBAL_RERANKER:
+            logger.warning("重排模型不可用，混合结果将保持原始排序")
+            return results[:self.config.get('top_n_rerank', 5)]
+        
+        try:
+            # 提取文本内容，用于重排
+            texts = [r['content'] for r in results]
+            
+            # 生成查询与每个文本的相似度分数
+            pairs = [[query, text] for text in texts]
+            scores = _GLOBAL_RERANKER.predict(pairs)
+            
+            # 为每个结果添加分数，并根据知识来源进行适度调整
+            for i, score in enumerate(scores):
+                # 自定义规则: 根据来源类型进行细微调整
+                source_boost = 1.0
+                if results[i]['source_type'] == 'document':
+                    # 当用户上传了文档时，给特定文档来源略微加分
+                    source_boost = 1.05  # 5%的提升
+                
+                # 存储调整后的分数
+                results[i]['relevance_score'] = score * source_boost
+            
+            # 重排序
+            reranked_results = sorted(results, key=lambda x: x.get('relevance_score', 0), reverse=True)
+            
+            # 截断到配置的长度
+            top_n = self.config.get('top_n_rerank', 5)
+            return reranked_results[:top_n]
+            
+        except Exception as e:
+            logger.exception(f"混合结果重排序失败: {str(e)}")
+            # 出错时返回原始列表，但仍然截断
+            return results[:self.config.get('top_n_rerank', 5)]
+
     # --- Private Helpers ---
     def _initialize_retrievers(self):
         """初始化一个带重排的混合检索管道."""
@@ -406,68 +603,6 @@ class RAGEngine:
             logger.exception(f"提取测验约束时出错: {e}")
             return {"topic": user_query}
 
-    def _generate_quiz_with_doc(self, **kwargs) -> Dict[str, Any]:
-        relevant_chunks = self.retrieve_relevant_chunks(kwargs['topic'])
-        if not relevant_chunks: return {"error": "未找到相关内容。"}
-        kwargs['reference_text'] = "\n\n".join([chunk.content for chunk in relevant_chunks])
-        return self._call_quiz_llm(**kwargs)
-        
-    def _generate_quiz_without_doc(self, **kwargs) -> Dict[str, Any]:
-        kwargs.pop('reference_text', None)
-        return self._call_quiz_llm(**kwargs)
-
-    def _call_quiz_llm(self, **kwargs) -> Dict[str, Any]:
-        # 使用支持JSON Schema的提示词渲染
-        quiz_examples = PromptManager._get_or_create_examples('quiz')
-        prompt = PromptManager.render_with_schema(
-            'quiz', 
-            kwargs,
-            output_schema=QuizModel,
-            examples=quiz_examples
-        )
-        system_prompt = "你是一个测验出题专家。请严格按照JSON Schema格式生成题目。"
-        log_context = {'user': kwargs.get('user'), 'session_id': kwargs.get('session_id'), 'document': self.document}
-        response = self.llm_client.generate_text(prompt, system_prompt=system_prompt, task_type='quiz', **log_context)
-        
-        if self.output_processor and self.config.get('structured_output', True):
-            try:
-                # 使用结构化输出处理
-                validated_response = self.output_processor.validate_and_fix(
-                    response.get('text', ''), 
-                    QuizModel, 
-                    self.llm_client,
-                    task_type="quiz_fix",
-                    **log_context
-                )
-                
-                # 更新响应，使用验证过的问题列表
-                quiz_data = [q.model_dump() for q in validated_response.questions]
-                return self._process_quiz_response({'text': json.dumps(quiz_data)}, kwargs.get('topic'), kwargs.get('difficulty'))
-            except ValueError as e:
-                logger.warning(f"测验结构化输出验证失败: {str(e)}，回退到传统处理")
-                # 回退到传统处理方式
-                return self._process_quiz_response(response, kwargs.get('topic'), kwargs.get('difficulty'))
-        else:
-            # 传统处理方式
-            return self._process_quiz_response(response, kwargs.get('topic'), kwargs.get('difficulty'))
-
-    def _process_quiz_response(self, response: Dict, topic: str, difficulty: str) -> Dict:
-        try:
-            quiz_data = self.output_processor._extract_and_parse_json(response.get("text", "[]"))
-            quiz_title = f"{self.document.title} - {topic}" if self.document else topic
-            quiz_obj = Quiz.objects.create(document=self.document, title=quiz_title, difficulty_level=difficulty, total_questions=len(quiz_data))
-            for i, q_data in enumerate(quiz_data):
-                # 字段映射：将 "type" 映射到 "question_type"
-                if 'type' in q_data:
-                    q_data['question_type'] = q_data.pop('type')
-                
-                Question.objects.create(quiz=quiz_obj, **q_data, order=i + 1)
-            response.update({'quiz_id': quiz_obj.id, 'quiz_data': quiz_data})
-        except Exception as e:
-            logger.error(f"处理测验数据失败: {e}")
-            response.update({'error': "解析或保存测验失败", 'quiz_data': []})
-        return response
-
     def _format_conversation_history(self, history: List[Dict[str, Any]]) -> str:
         """
         将对话历史格式化为文本，特殊处理包含摘要的对话轮次。
@@ -509,19 +644,19 @@ class RAGEngine:
             system_prompt = "你是一个专业的查询重写助手。你的任务是根据对话历史，将用户的最新查询重写为一个完整、独立、明确的查询。"
             prompt = f"""基于以下对话历史和用户的最新问题，判断是否需要重写：
 
-对话历史:
-{history_text}
+                        对话历史:
+                        {history_text}
 
-用户最新问题: {query}
+                        用户最新问题: {query}
 
-要求:
-1. 如果最新问题已经清晰完整，可以独立理解，则直接返回原问题。
-2. 如果最新问题包含代词引用（如"它"、"他们"、"这个"等）或上下文省略，请重写为完整、独立的问题。
-3. 回答格式: 只返回重写后的问题，不要包含任何解释或其他文字。
-4. 保持简洁，不要添加不必要的内容。
-5. 充分利用对话历史（包括摘要部分）提供的上下文信息。
+                        要求:
+                        1. 如果最新问题已经清晰完整，可以独立理解，则直接返回原问题。
+                        2. 如果最新问题包含代词引用（如"它"、"他们"、"这个"等）或上下文省略，请重写为完整、独立的问题。
+                        3. 回答格式: 只返回重写后的问题，不要包含任何解释或其他文字。
+                        4. 保持简洁，不要添加不必要的内容。
+                        5. 充分利用对话历史（包括摘要部分）提供的上下文信息。
 
-重写后的问题:"""
+                        重写后的问题:"""
 
             # 调用LLM进行查询重写
             response = self.llm_client.generate_text(prompt=prompt, system_prompt=system_prompt, task_type="query_rewrite")
@@ -644,6 +779,112 @@ class RAGEngine:
             logger.exception(f"生成对话摘要失败: {e}")
             # 出错时返回简单描述
             return f"早先的对话包含了{len(conversation_turns)}轮交流。"
+
+    def init_general_knowledge_base(self):
+        """初始化通用知识库检索器"""
+        if os.path.exists(GENERAL_KNOWLEDGE_DIR):
+            try:
+                # 检查知识库是否已经存在
+                if os.listdir(GENERAL_KNOWLEDGE_DIR):
+                    # 加载通用知识库的向量存储
+                    kb_vector_store = Chroma(
+                        persist_directory=GENERAL_KNOWLEDGE_DIR,
+                        embedding_function=self.embeddings
+                    )
+                    
+                    # 使用向量存储创建检索器，配置相同的重排参数
+                    self.kb_retriever = kb_vector_store.as_retriever(
+                        search_kwargs={"k": self.config.get('top_n_rerank', 5)}
+                    )
+                    
+                    # 如果有重排模型，应用与文档检索相同的重排策略
+                    if _GLOBAL_RERANKER:
+                        compressor = CrossEncoderReranker(
+                            model=_GLOBAL_RERANKER, 
+                            top_n=self.config.get('top_n_rerank', 5)
+                        )
+                        self.kb_retriever = ContextualCompressionRetriever(
+                            base_compressor=compressor,
+                            base_retriever=self.kb_retriever
+                        )
+                    
+                    logger.info("通用知识库检索器已初始化")
+                else:
+                    logger.warning("通用知识库目录存在但为空，暂不可用")
+            except Exception as e:
+                logger.error(f"初始化通用知识库失败: {str(e)}")
+                self.kb_retriever = None
+        else:
+            logger.info("通用知识库不存在，跳过初始化")
+            self.kb_retriever = None
+
+    def retrieve_from_knowledge_base(self, query: str) -> List[Dict[str, Any]]:
+        """从通用知识库检索相关内容
+        
+        Args:
+            query: 查询文本
+            
+        Returns:
+            知识库检索结果列表，每项包含内容和元数据
+        """
+        if not self.kb_retriever:
+            logger.warning("通用知识库检索器未初始化，无法执行检索")
+            return []
+            
+        try:
+            results = self.kb_retriever.get_relevant_documents(query)
+            
+            # 将LangChain文档对象转换为带有源信息的字典
+            processed_results = []
+            for idx, doc in enumerate(results):
+                processed_results.append({
+                    'content': doc.page_content,
+                    'metadata': doc.metadata,
+                    'id': idx + 1  # 为了与文档块ID保持一致的引用方式
+                })
+                
+            return processed_results
+        except Exception as e:
+            logger.exception(f"从通用知识库检索失败: {str(e)}")
+            return []
+
+    def _save_quiz_to_db(self, quiz_data: List[Dict], topic: str, difficulty: str) -> Optional[int]:
+        """将通过验证的测验数据保存到数据库。"""
+        if not quiz_data:
+            return None
+            
+        try:
+            # 确定测验标题
+            if self.document:
+                quiz_title = f"{self.document.title} - {topic}"
+            else:
+                quiz_title = f"通用知识 - {topic}"
+                
+            # 创建测验记录，document可以为None表示通用知识库生成
+            quiz_obj = Quiz.objects.create(
+                document=self.document, 
+                title=quiz_title, 
+                difficulty_level=difficulty,
+                total_questions=len(quiz_data),
+                metadata={
+                    'is_general_knowledge': self.document is None,
+                    'knowledge_source': "通用知识库" if self.document is None else "文档"
+                }
+            )
+            
+            # 使用bulk_create提高效率
+            questions_to_create = []
+            for i, q_data in enumerate(quiz_data):
+                if 'type' in q_data:
+                    q_data['question_type'] = q_data.pop('type')
+                questions_to_create.append(Question(quiz=quiz_obj, **q_data, order=i + 1))
+            
+            Question.objects.bulk_create(questions_to_create)
+            
+            return quiz_obj.id
+        except Exception as e:
+            logger.error(f"保存测验数据到数据库失败: {e}")
+            return None
 
 def initialize_ai_services():
     """初始化所有AI服务相关组件"""

@@ -60,8 +60,16 @@ class PromptManager:
             # 动态处理 RAG 和对话历史的占位符
             if '$reference_text_section' in template_content:
                 if variables.get('reference_text'):
-                    variables['reference_text_section'] = f"参考资料:\n{variables['reference_text']}"
-                    variables['reference_instruction'] = "请严格根据上面提供的参考资料来回答问题。"
+                    # 获取知识来源标识，如果存在
+                    knowledge_source = variables.get('knowledge_source', '参考资料')
+                    # 根据知识来源类型设置不同的标题
+                    variables['reference_text_section'] = f"{knowledge_source}:\n{variables['reference_text']}"
+                    
+                    # 根据知识来源定制指令
+                    if knowledge_source == "通用知识库":
+                        variables['reference_instruction'] = "请根据通用知识库中的内容回答问题。如果知识库内容不足，可以补充你的知识，但要明确标注哪些内容来自知识库，哪些是你的补充。"
+                    else:
+                        variables['reference_instruction'] = "请严格根据上面提供的参考资料来回答问题。"
                 else:
                     variables['reference_text_section'] = ""
                     variables['reference_instruction'] = "基于你的知识提供最准确的回答。"
@@ -315,14 +323,15 @@ class PromptManager:
                             2. 对于每个关键信息点，必须在句末通过方括号标注其来源编号，例如：[1]、[2]。
                             3. 如果一个句子综合了多个来源，请标注所有来源，例如：[1,2]。
                             4. 不要编造不在参考资料中的信息。如果参考资料不足以回答问题，请明确说明。
+                            5. 如果使用了通用知识库的内容，请特别标注内容来源于"通用知识库"。
                             
                             $json_schema_section
                             
                             $examples_section
 
                             请开始你的回答:""",
-                'variables': ['query', 'reference_text', 'conversation_history', 'output_schema', 'examples'],
-                'version': '4.0'
+                'variables': ['query', 'reference_text', 'conversation_history', 'output_schema', 'examples', 'knowledge_source'],
+                'version': '5.0'
             },
             'quiz': {
                 'name': '统一测验生成',
@@ -336,13 +345,18 @@ class PromptManager:
                             难度级别: $difficulty。
                             $reference_instruction
                             
+                            注意事项:
+                            1. 如果使用的是通用知识库，测验题目应该具有通用性和教育价值。
+                            2. 每道题目应包含明确的知识点标注，便于学习者了解所考察的知识领域。
+                            3. 难度设置应符合要求，请确保题目既有挑战性又不偏离主题范围。
+                            
                             $json_schema_section
                             
                             $examples_section
 
                             请严格按指定格式返回，不要有其他文字。请确保返回格式符合JSON Schema要求，可以被直接解析。""",
-                'variables': ['reference_text', 'topic', 'user_requirements', 'question_count', 'question_types', 'difficulty', 'output_schema', 'examples'],
-                'version': '4.0'
+                'variables': ['reference_text', 'topic', 'user_requirements', 'question_count', 'question_types', 'difficulty', 'output_schema', 'examples', 'knowledge_source'],
+                'version': '5.0'
             },
             'summary': {
                 'name': '标准文档总结',
