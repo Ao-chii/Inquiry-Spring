@@ -4,15 +4,30 @@ Django settings for InquirySpring Backend.
 
 import os
 from pathlib import Path
+from dotenv import load_dotenv
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+# Load environment variables from .env file
+load_dotenv(BASE_DIR / '.env')
+
+# 设置Hugging Face相关环境变量
+if os.getenv('USE_PROXY', 'false').lower() == 'true':
+    proxy_url = os.getenv('PROXY_URL', 'http://127.0.0.1:7890')
+    os.environ['HTTP_PROXY'] = proxy_url
+    os.environ['HTTPS_PROXY'] = proxy_url
+
+# 设置Hugging Face Hub配置
+os.environ['HF_ENDPOINT'] = os.getenv('HF_ENDPOINT', 'https://huggingface.co')
+os.environ['TRANSFORMERS_OFFLINE'] = os.getenv('TRANSFORMERS_OFFLINE', '0')
+os.environ['HF_HUB_OFFLINE'] = os.getenv('HF_HUB_OFFLINE', '0')
+
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-inquiry-spring-secret-key-change-in-production'
+SECRET_KEY = os.getenv('SECRET_KEY', 'django-insecure-inquiry-spring-secret-key-change-in-production')
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = os.getenv('DEBUG', 'True').lower() in ('true', '1', 'yes')
 
 ALLOWED_HOSTS = ['*']
 
@@ -37,11 +52,13 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
+    'inquiryspring_backend.middleware.DisableCSRFMiddleware',  # 禁用CSRF检查
+    'inquiryspring_backend.middleware.DebugMiddleware',  # 调试中间件
     'inquiryspring_backend.middleware.RequestLoggingMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
-    'django.middleware.csrf.CsrfViewMiddleware',
+    # 'django.middleware.csrf.CsrfViewMiddleware',  # 已禁用
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
@@ -110,13 +127,30 @@ MEDIA_ROOT = BASE_DIR / 'media'
 # Default primary key field type
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-# CORS settings for Vue.js frontend
+# CORS settings for Vue.js frontend - 完全匹配前端配置
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:5000",
     "http://127.0.0.1:5000",
+    "http://0.0.0.0:5000",  # 前端配置的host
 ]
 
-CORS_ALLOW_ALL_ORIGINS = True  # For development only
+CORS_ALLOW_ALL_ORIGINS = True  # 开发阶段允许所有来源
+CORS_ALLOW_CREDENTIALS = True
+CORS_ALLOW_HEADERS = ['*']
+CORS_ALLOW_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']
+CORS_PREFLIGHT_MAX_AGE = 86400
+
+# 开发阶段完全禁用CSRF保护
+CSRF_COOKIE_SECURE = False
+CSRF_USE_SESSIONS = False
+CSRF_TRUSTED_ORIGINS = [
+    'http://localhost:5000',
+    'http://127.0.0.1:5000',
+    'http://0.0.0.0:5000',
+    'http://localhost:8000',
+    'http://127.0.0.1:8000',
+]
+CSRF_FAILURE_VIEW = 'django.views.csrf.csrf_failure'
 
 # REST Framework settings
 REST_FRAMEWORK = {
@@ -158,5 +192,36 @@ LOGGING = {
             'level': 'DEBUG',
             'propagate': False,
         },
+        'inquiryspring_backend.ai_services': {
+            'handlers': ['console'],
+            'level': 'DEBUG',
+            'propagate': False,
+        },
     },
+}
+
+# AI Services Configuration
+AI_SERVICES = {
+    'RAG_ENGINE': {
+        'chunk_size': 1000,
+        'chunk_overlap': 100,
+        'top_k_retrieval': 3,
+        'default_question_count': 5,
+        'default_question_types': ['MC', 'TF'],
+        'default_difficulty': 'medium',
+    },
+    'VECTOR_STORE_DIR': BASE_DIR / 'vector_store',
+    'EMBEDDINGS_MODEL': 'sentence-transformers/all-mpnet-base-v2',
+    'DEFAULT_MODEL': {
+        'name': 'Gemini Flash 2.5',
+        'provider': 'gemini',
+        'model_id': 'gemini-2.5-flash-preview-05-20',
+        'api_key': os.getenv('GOOGLE_API_KEY', ''),
+        'max_tokens': 8000,
+        'temperature': 0.7,
+        'is_active': True,
+        'is_default': True
+    },
+    'GOOGLE_API_KEY': os.getenv('GOOGLE_API_KEY', ''),
+    'GEMINI_OFFLINE_MODE': os.getenv('GEMINI_OFFLINE_MODE', 'False').lower() in ('true', '1', 'yes'),
 }

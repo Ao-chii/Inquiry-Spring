@@ -99,3 +99,9 @@ README.md
 .gitignore
 FRONTEND_CLEANUP_SUMMARY.md
 test_ai_service.py
+
+#数据库
+backend/inquiryspring_backend/db.sqlite3
+
+
+backend/inquiryspring_backend/ai_services/migrations/0003_alter_aimodel_max_tokens.py

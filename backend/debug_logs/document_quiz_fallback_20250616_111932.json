@@ -1,0 +1,22 @@
+{
+  "request_type": "document_upload_quiz_fallback",
+  "document_title": "ec54ed02e123c10a88db4626f5e5dfda(1).pdf",
+  "document_id": 56,
+  "user_query": "基于文档《ec54ed02e123c10a88db4626f5e5dfda(1).pdf》生成5道medium难度的测验题目",
+  "question_count": 5,
+  "difficulty": "medium",
+  "question_types": [
+    "MC",
+    "TF"
+  ],
+  "raw_ai_response": {
+    "text": "```json\n[\n  {\n    \"content\": \"抱歉，我无法直接访问或读取您本地文件系统中的文件，例如 'ec54ed02e123c10a88db4626f5e5dfda(1).pdf'。因此，我无法基于该文件的具体内容生成测验题目。\",\n    \"type\": \"SA\",\n    \"options\": [],\n    \"correct_answer\": [\"无法访问文件\", \"需要提供文本内容\"],\n    \"explanation\": \"作为一个AI模型，我无法直接访问您的本地文件路径或外部文档。为了能为您生成基于特定文件内容的测验题目，请您直接将该PDF文件的文本内容复制并粘贴给我，或者通过其他方式提供可供我读取的文本信息。\",\n    \"difficulty\": \"medium\",\n    \"knowledge_points\": [\"AI模型能力限制\", \"文件访问权限\", \"文本输入要求\"]\n  }\n]\n```",
+    "tokens_used": 657,
+    "model": "gemini-2.5-flash-preview-05-20",
+    "finish_reason": "stop",
+    "error": "解析或保存测验失败",
+    "quiz_data": []
+  },
+  "timestamp": "2025-06-16T03:19:32.316231+00:00",
+  "note": "RAG处理失败，使用备用方案"
+}

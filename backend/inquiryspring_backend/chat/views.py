@@ -11,7 +11,7 @@ import json
 from datetime import datetime
 
 from .models import ChatSession, Message, Conversation
-from ..ai_service_wrapper import ai_service
+from ..ai_services.rag_engine import RAGEngine
 from ..documents.models import Document, UploadedFile
 
 logger = logging.getLogger(__name__)
@@ -48,42 +48,79 @@ class ChatView(View):
                 used_document = latest_document
                 logger.info(f"使用最近文档作为上下文: {latest_document.title}")
 
-            # 使用AI服务生成回复（带上下文）
-            if context:
-                # 构建带文档上下文的提示
-                enhanced_message = f"""
-基于以下文档内容回答用户问题：
+            # 创建RAG引擎实例并使用AI服务生成回复
+            rag_engine = RAGEngine()
 
-文档标题：{used_document.title}
-文档内容：
-{context[:3000]}  # 限制上下文长度
+            if context and used_document:
+                # 智能判断问题是否需要基于文档回答
+                should_use_document = self._should_use_document_context(user_message)
 
-用户问题：
-{user_message}
+                if should_use_document:
+                    # 有上下文且问题相关 - 使用文档ID进行基于文档的聊天
+                    ai_result = rag_engine.handle_chat(
+                        query=user_message,
+                        document_id=used_document.id
+                    )
 
-请基于文档内容给出准确、详细的回答。如果问题与文档内容无关，请说明并尝试给出一般性回答。
-"""
-                ai_result = ai_service.chat(enhanced_message)
+                    # 检查是否实际使用了文档内容
+                    is_generic_answer = ai_result.get("is_generic_answer", False)
+                    sources = ai_result.get("sources", [])
 
-                # 在回复前添加文档引用信息
-                ai_response = ai_result.get("text", "抱歉，AI服务暂时不可用")
-                ai_response = f"📄 基于文档《{used_document.title}》回答：\n\n{ai_response}"
+                    ai_response = ai_result.get("answer", "抱歉，AI服务暂时不可用")
+
+                    # 只有在实际使用了文档内容时才添加文档引用信息
+                    if not is_generic_answer and sources:
+                        ai_response = f"📄 基于文档《{used_document.title}》回答：\n\n{ai_response}"
+                    else:
+                        logger.info(f"问题与文档内容无关，提供通用回答: {user_message}")
+                else:
+                    # 问题与文档无关，直接进行普通聊天（不传递document_id）
+                    logger.info(f"智能判断：问题与文档无关，使用通用回答: {user_message}")
+                    ai_result = rag_engine.handle_chat(query=user_message)  # 不传递document_id
+                    ai_response = ai_result.get("answer", "抱歉，AI服务暂时不可用")
             else:
-                ai_result = ai_service.chat(user_message)
-                ai_response = ai_result.get("text", "抱歉，AI服务暂时不可用")
+                # 无上下文的情况 - 普通聊天
+                ai_result = rag_engine.handle_chat(query=user_message)
+                ai_response = ai_result.get("answer", "抱歉，AI服务暂时不可用")
 
-            # 保存到数据库
+            # 保存到数据库，初始状态为处理中
             chat_session = ChatSession.objects.create(
                 user_message=user_message,
-                ai_response=ai_response
+                ai_response="",  # 初始为空
+                is_ready=False  # 添加is_ready字段，初始为False
             )
 
-            logger.info(f"AI回复生成成功: {ai_response[:100]}...")
+            logger.info(f"开始处理用户消息: {user_message}")
+
+            # 异步处理AI回复
+            import threading
+            def process_ai_response():
+                try:
+                    # 这里是AI处理逻辑（之前的代码）
+                    final_ai_response = ai_response
+
+                    # 更新数据库
+                    chat_session.ai_response = final_ai_response
+                    chat_session.is_ready = True
+                    chat_session.save()
+
+                    logger.info(f"AI回复生成完成: {final_ai_response[:100]}...")
+                except Exception as e:
+                    logger.error(f"AI处理失败: {e}")
+                    chat_session.ai_response = f"抱歉，处理您的消息时出现错误: {str(e)}"
+                    chat_session.is_ready = True
+                    chat_session.save()
+
+            # 启动后台线程处理
+            thread = threading.Thread(target=process_ai_response)
+            thread.daemon = True
+            thread.start()
 
             return JsonResponse({
                 'status': 'success',
-                'message': '消息已发送',
+                'message': '消息已接收，正在处理中',
                 'session_id': chat_session.id,
+                'is_ready': False,
                 'has_context': bool(context),
                 'used_document': used_document.title if used_document else None
             })
@@ -127,14 +164,100 @@ class ChatView(View):
                 'error': f'获取失败: {str(e)}'
             }, status=500)
 
+    def _should_use_document_context(self, query: str) -> bool:
+        """智能判断问题是否需要基于文档回答"""
+        import re
+
+        # 简单的数学表达式检测
+        math_patterns = [
+            r'^\s*\d+\s*[\+\-\*/]\s*\d+\s*$',  # 简单数学运算如 1+5
+            r'^\s*\d+\s*([\+\-\*/]\s*\d+\s*)+$',  # 多项数学运算
+            r'^\s*\(\s*\d+.*\)\s*$',  # 带括号的数学表达式
+        ]
+
+        for pattern in math_patterns:
+            if re.match(pattern, query.strip()):
+                logger.info(f"检测到数学表达式，不使用文档上下文: {query}")
+                return False
+
+        # 简单的问候语检测
+        greetings = ['hi', 'hello', '你好', '您好', 'hey', '嗨', '哈喽', 'hi~']
+        query_lower = query.lower().strip()
+        if query_lower in greetings or any(greeting in query_lower for greeting in greetings):
+            logger.info(f"检测到问候语，不使用文档上下文: {query}")
+            return False
+
+        # 检查是否是通用回复
+        generic_queries = [
+            '谢谢', 'thank you', '再见', 'bye', 'goodbye',
+            '好的', 'ok', 'okay', '明白', '知道了', '没问题'
+        ]
+
+        if query_lower in generic_queries:
+            logger.info(f"检测到通用回复，不使用文档上下文: {query}")
+            return False
+
+        # 如果查询很短且通用，可能不相关
+        if len(query.strip()) < 3:
+            logger.info(f"查询过短，不使用文档上下文: {query}")
+            return False
+
+        # 检测时间相关问题
+        time_patterns = [
+            r'现在.*时间', r'几点了', r'what time', r'当前时间'
+        ]
+        for pattern in time_patterns:
+            if re.search(pattern, query_lower):
+                logger.info(f"检测到时间相关问题，不使用文档上下文: {query}")
+                return False
+
+        # 检测常见的通用问题
+        general_patterns = [
+            r'^\s*\d+\s*[等于=]\s*\d+\s*$',  # 等式
+            r'天气', r'weather', r'今天.*怎么样',
+            r'你是谁', r'who are you', r'你叫什么',
+            r'你好吗', r'how are you', r'最近怎么样',
+            r'现在几点', r'今天星期几', r'今天日期',
+            r'帮我.*计算', r'算一下', r'计算.*结果'
+        ]
+
+        for pattern in general_patterns:
+            if re.search(pattern, query_lower):
+                logger.info(f"检测到通用问题，不使用文档上下文: {query}")
+                return False
+
+        # 默认认为需要使用文档上下文
+        return True
+
+
+@api_view(['GET'])
+def chat_status(request, session_id):
+    """检查聊天消息状态"""
+    try:
+        chat_session = ChatSession.objects.get(id=session_id)
+
+        return Response({
+            'session_id': session_id,
+            'is_ready': chat_session.is_ready,
+            'ai_response': chat_session.ai_response if chat_session.is_ready else '',
+            'user_message': chat_session.user_message,
+            'timestamp': chat_session.timestamp.isoformat()
+        })
+
+    except ChatSession.DoesNotExist:
+        return Response({'error': '会话不存在'}, status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        logger.error(f"获取聊天状态失败: {e}")
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
 
 @api_view(['GET'])
 def chat_history(request):
     """获取聊天历史"""
     try:
-        messages = ChatSession.objects.all()[:20]  # 最近20条
+        messages = ChatSession.objects.filter(is_ready=True)[:20]  # 只返回已完成的消息
         history = []
-        
+
         for msg in messages:
             history.append({
                 'id': msg.id,
@@ -142,9 +265,9 @@ def chat_history(request):
                 'ai_response': msg.ai_response,
                 'timestamp': msg.timestamp.isoformat()
             })
-        
+
         return Response({'history': history})
-        
+
     except Exception as e:
         logger.error(f"获取聊天历史失败: {e}")
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -245,6 +368,20 @@ class ChatDocumentUploadView(View):
                 document.save()
 
                 logger.info(f"聊天文档处理成功: {filename}")
+
+                # 立即进行RAG处理和向量化
+                try:
+                    from ..ai_services import process_document_for_rag
+                    rag_processing_result = process_document_for_rag(document.id, force_reprocess=True)
+
+                    if rag_processing_result:
+                        logger.info(f"聊天文档RAG处理成功: {filename}")
+                    else:
+                        logger.warning(f"聊天文档RAG处理失败: {filename}")
+
+                except Exception as e:
+                    logger.error(f"聊天文档RAG处理异常: {filename}, 错误: {e}")
+                    # RAG处理失败不影响文档上传成功
 
                 return JsonResponse({
                     'message': '文档上传成功，现在可以基于此文档进行问答',

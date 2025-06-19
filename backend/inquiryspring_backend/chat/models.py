@@ -55,6 +55,7 @@ class ChatSession(models.Model):
     session_id = models.CharField('会话ID', max_length=100, unique=True, null=True, blank=True)
     user_message = models.TextField('用户消息')
     ai_response = models.TextField('AI回复')
+    is_ready = models.BooleanField('是否已完成', default=False)  # 新增字段
     timestamp = models.DateTimeField('时间戳', auto_now_add=True)
     
     class Meta:

@@ -1,0 +1,17 @@
+{
+  "request_type": "normal_quiz",
+  "document_title": "ec54ed02e123c10a88db4626f5e5dfda1.pdf",
+  "document_id": 52,
+  "user_query": "基于文档《ec54ed02e123c10a88db4626f5e5dfda1.pdf》生成3道medium难度的测验题目",
+  "question_count": 3,
+  "difficulty": "medium",
+  "question_types": [
+    "MC",
+    "TF"
+  ],
+  "topic": "",
+  "raw_ai_response": {
+    "error": "未找到相关内容。"
+  },
+  "timestamp": "2025-06-16T03:19:24.249859+00:00"
+}

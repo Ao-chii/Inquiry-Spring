@@ -90,7 +90,7 @@ class Command(BaseCommand):
                 'provider': 'gemini',
                 'model_id': 'gemini-2.5-flash-preview-05-20',
                 'api_key': gemini_api_key, # 同样从环境变量获取
-                'max_tokens': 2000,
+                'max_tokens': 10000,
                 'temperature': 0.7,
                 'is_active': False, # 由于之前的配额问题，默认不激活
                 'is_default': False
