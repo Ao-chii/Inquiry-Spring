@@ -151,5 +151,5 @@ class Command(BaseCommand):
                 self.stdout.write(f"更新/确认AI模型: {obj.name}")
                 updated_count +=1
         
-        self.stdout.write(f"共创建 {created_count} 个AI模型配置，更新/确认 {updated_count} 个AI模型配置。")
+        self.stdout.write(f"共创建 {created_count} 个AI模型配置，更新/确认 {updated_count} 个AI模型配置。") 
         self.stdout.write(self.style.SUCCESS("AI模型配置初始化完成。")) 
