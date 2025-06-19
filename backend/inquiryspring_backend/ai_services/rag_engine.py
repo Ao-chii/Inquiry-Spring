@@ -16,7 +16,8 @@ from langchain.retrievers.document_compressors import CrossEncoderReranker
 from langchain.schema import Document as LangchainDocument # Alias to avoid confusion
 
 # Model imports for reranking
-from sentence_transformers import CrossEncoder
+# from sentence_transformers import CrossEncoder # This is now wrapped by the LangChain community class
+from langchain_community.cross_encoders import HuggingFaceCrossEncoder
 
 # Chinese tokenization for BM25
 import jieba
@@ -53,7 +54,9 @@ except Exception as e:
 # ---- 全局重排模型单例 ----
 RERANKER_MODEL_NAME = os.getenv("RERANKER_MODEL_NAME", "BAAI/bge-reranker-v2-m3")
 try:
-    _GLOBAL_RERANKER = CrossEncoder(RERANKER_MODEL_NAME)
+    # Use LangChain's wrapper to ensure compatibility with CrossEncoderReranker.
+    # The underlying sentence_transformers model is accessible via the `.client` attribute.
+    _GLOBAL_RERANKER = HuggingFaceCrossEncoder(model_name=RERANKER_MODEL_NAME)
     logger.info(f"已加载全局重排模型: {RERANKER_MODEL_NAME}")
 except Exception as e:
     logger.error(f"加载重排模型 {RERANKER_MODEL_NAME} 失败: {e}。重排功能将不可用。")
@@ -500,18 +503,26 @@ class RAGEngine:
             
             # 生成查询与每个文本的相似度分数
             pairs = [[query, text] for text in texts]
-            scores = _GLOBAL_RERANKER.predict(pairs)
+            # Access the underlying sentence-transformer model via the `.client` attribute for direct prediction
+            scores = _GLOBAL_RERANKER.client.predict(pairs)
             
             # 为每个结果添加分数，并根据知识来源进行适度调整
             for i, score in enumerate(scores):
+                final_score = score
+                # Handle cases where the reranker returns multiple scores (e.g., [dissimilarity, similarity])
+                # We assume the last score is the one indicating relevance.
+                if isinstance(score, (list, tuple)) or (hasattr(score, 'shape') and len(score.shape) > 0):
+                    logger.debug(f"Reranker returned multiple scores: {score}. Using the last one.")
+                    final_score = score[-1]
+
                 # 自定义规则: 根据来源类型进行细微调整
                 source_boost = 1.0
-                if results[i]['source_type'] == 'document':
+                if results[i]['source_type'] == 'document' and self.document:
                     # 当用户上传了文档时，给特定文档来源略微加分
                     source_boost = 1.05  # 5%的提升
                 
                 # 存储调整后的分数
-                results[i]['relevance_score'] = score * source_boost
+                results[i]['relevance_score'] = final_score * source_boost
             
             # 重排序
             reranked_results = sorted(results, key=lambda x: x.get('relevance_score', 0), reverse=True)
