@@ -50,7 +50,7 @@
         <el-main style="padding: 20px; display: flex; flex-direction: column; height: 100%; background-color: rgba(255,255,255,0.7); border-radius: 16px; margin: 20px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); border: 1px solid rgba(139, 115, 85, 0.1)">
             <div class="content-container" style="flex: 1; display: flex; flex-direction: column; gap: 30px;">
                 <el-col style="width: 1000px; padding: 30px; background: rgba(255,255,255,0.9); border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); display: flex; gap: 10px;">
-                    <!-- <div style="flex: 1; padding: 10px;">
+                    <div style="flex: 1; padding: 10px;">
                         <h3 style="margin-bottom: 15px; display: flex; align-items: center; gap: 5px;">
                             上传文件
                             <el-tooltip content="将根据上传的学习材料生成测试题目" placement="right">
@@ -66,7 +66,7 @@
                         <div class="el-upload__text" style="color: #5a4a3a;">将文件拖到此处，或<em style="color: #8b7355;">点击上传</em></div>
                         <div class="el-upload__tip" slot="tip" style="color: #8b7355;">支持word,pdf格式</div>
                         </el-upload>
-                    </div> -->
+                    </div>
                     <div style="flex: 1; padding: 15px;">
                         <h3 style="margin-bottom: 15px; display: flex; align-items: center; gap: 5px;">
                             测试设置
@@ -89,6 +89,7 @@
                                 <el-checkbox label="多选题" name="type"></el-checkbox>
                                 <el-checkbox label="判断题" name="type"></el-checkbox>
                                 <el-checkbox label="填空题" name="type"></el-checkbox>
+                                <el-checkbox label="简答题" name="type"></el-checkbox>
                                 </el-checkbox-group>
                             </el-form-item>
                             <el-form-item label="题目难度">
@@ -147,50 +148,84 @@
                                 </div>
                             </el-row>
                             <el-row>
-                                <span v-if="question[i]?.type==='单选题'">
-                                    <el-select v-model="answer[i]" placeholder="请选择" style="margin-top: 15px;">
-                                        <el-option
-                                        v-for="item in options"
-                                        :key="item.value"
-                                        :label="item.label"
-                                        :value="item.value">
-                                        </el-option>
-                                    </el-select>
-                                </span>
-                                <span v-else-if="question[i]?.type==='多选题'">
-                                    <el-select v-model="answer[i]" multiple placeholder="请选择" style="margin-top: 15px;">
-                                        <el-option
-                                        v-for="item in options"
-                                        :key="item.value"
-                                        :label="item.label"
-                                        :value="item.value">
-                                        </el-option>
-                                    </el-select>
-                                </span>
-                                <span v-else-if="question[i]?.type==='判断题'">
-                                    <el-select v-model="answer[i]" placeholder="请选择" style="margin-top: 15px;">
-                                        <el-option
-                                        v-for="item in options_2"
-                                        :key="item.value"
-                                        :label="item.label"
-                                        :value="item.value">
-                                        </el-option>
-                                    </el-select>
-                                </span>
-                                <span v-else-if="question[i]?.type==='填空题'" style="margin-top: 15px;">
-                                    <v-text-field 
-                                        label="输入答案" 
+                                <!-- 单选题 - 四个小圆圈 -->
+                                <div v-if="question[i]?.type==='单选题'" style="margin-top: 15px;">
+                                    <div v-for="(option, optIndex) in question[i]?.options || []"
+                                         :key="optIndex"
+                                         class="option-item"
+                                         style="display: flex; align-items: center; margin-bottom: 10px; cursor: pointer;"
+                                         @click="selectSingleOption(i, getOptionId(option, optIndex))">
+                                        <div class="radio-circle"
+                                             :class="{ 'selected': answer[i] === getOptionId(option, optIndex) }"
+                                             style="width: 20px; height: 20px; border: 2px solid #8b7355; border-radius: 50%; margin-right: 10px; display: flex; align-items: center; justify-content: center;">
+                                            <div v-if="answer[i] === getOptionId(option, optIndex)"
+                                                 style="width: 10px; height: 10px; background: #8b7355; border-radius: 50%;"></div>
+                                        </div>
+                                        <span style="color: #5a4a3a;">{{ getOptionText(option) }}</span>
+                                    </div>
+                                </div>
+
+                                <!-- 多选题 - 四个小圆圈，可多选 -->
+                                <div v-else-if="question[i]?.type==='多选题'" style="margin-top: 15px;">
+                                    <div v-for="(option, optIndex) in question[i]?.options || []"
+                                         :key="optIndex"
+                                         class="option-item"
+                                         style="display: flex; align-items: center; margin-bottom: 10px; cursor: pointer;"
+                                         @click="toggleMultipleOption(i, getOptionId(option, optIndex))">
+                                        <div class="checkbox-circle"
+                                             :class="{ 'selected': isMultipleSelected(i, getOptionId(option, optIndex)) }"
+                                             style="width: 20px; height: 20px; border: 2px solid #8b7355; border-radius: 50%; margin-right: 10px; display: flex; align-items: center; justify-content: center;">
+                                            <div v-if="isMultipleSelected(i, getOptionId(option, optIndex))"
+                                                 style="width: 10px; height: 10px; background: #8b7355; border-radius: 50%;"></div>
+                                        </div>
+                                        <span style="color: #5a4a3a;">{{ getOptionText(option) }}</span>
+                                    </div>
+                                </div>
+
+                                <!-- 判断题 - 两个小圆圈 -->
+                                <div v-else-if="question[i]?.type==='判断题'" style="margin-top: 15px;">
+                                    <div v-for="(option, optIndex) in (question[i]?.options || [{text: '正确', id: 'A'}, {text: '错误', id: 'B'}])"
+                                         :key="optIndex"
+                                         class="option-item"
+                                         style="display: flex; align-items: center; margin-bottom: 10px; cursor: pointer;"
+                                         @click="selectSingleOption(i, getOptionId(option, optIndex))">
+                                        <div class="radio-circle"
+                                             :class="{ 'selected': answer[i] === getOptionId(option, optIndex) }"
+                                             style="width: 20px; height: 20px; border: 2px solid #8b7355; border-radius: 50%; margin-right: 10px; display: flex; align-items: center; justify-content: center;">
+                                            <div v-if="answer[i] === getOptionId(option, optIndex)"
+                                                 style="width: 10px; height: 10px; background: #8b7355; border-radius: 50%;"></div>
+                                        </div>
+                                        <span style="color: #5a4a3a;">{{ getOptionText(option) }}</span>
+                                    </div>
+                                </div>
+
+                                <!-- 填空题 -->
+                                <div v-else-if="question[i]?.type==='填空题'" style="margin-top: 15px;">
+                                    <el-input
                                         v-model="answer[i]"
-                                    ></v-text-field>
-                                </span>
-                               
+                                        placeholder="请输入答案"
+                                        style="width: 100%;">
+                                    </el-input>
+                                </div>
+
+                                <!-- 简答题 -->
+                                <div v-else-if="question[i]?.type==='简答题'" style="margin-top: 15px;">
+                                    <el-input
+                                        v-model="answer[i]"
+                                        type="textarea"
+                                        :rows="4"
+                                        placeholder="请输入答案"
+                                        style="width: 100%;">
+                                    </el-input>
+                                </div>
+
                                 <span v-if="answerStatus && answerStatus[i] === true" style="color:#4caf50;margin-left:10px;">✔ 正确</span>
                                 <span v-else-if="answerStatus && answerStatus[i] === false" style="color:#f44336;margin-left:10px;">✘ 错误，正确答案：{{ question[i].answer }}</span>
                             </el-row>
                             <el-row v-if="showAnalysis && showAnalysis[i]">
                                 <div style="margin-top: 10px; color: #8b7355;">
                                     <strong>解析:</strong>
-                                    <div v-html="markMessage(question[i].analysis)"></div>
+                                    <div v-html="markMessage(question[i].explanation || question[i].analysis)"></div>
                                 </div>
                             </el-row>
                             </v-expansion-panel-content>
@@ -273,6 +308,32 @@
     @keyframes bounce {
         0%, 80%, 100% { transform: scale(1); }
         40% { transform: scale(1.5); }
+    }
+
+    /* 选项样式 */
+    .option-item {
+        transition: all 0.2s ease;
+    }
+
+    .option-item:hover {
+        background-color: rgba(139, 115, 85, 0.05);
+        border-radius: 4px;
+        padding: 5px;
+        margin: -5px;
+    }
+
+    .radio-circle, .checkbox-circle {
+        transition: all 0.2s ease;
+    }
+
+    .radio-circle:hover, .checkbox-circle:hover {
+        border-color: #5a4a3a;
+        transform: scale(1.1);
+    }
+
+    .radio-circle.selected, .checkbox-circle.selected {
+        border-color: #8b7355;
+        box-shadow: 0 0 0 2px rgba(139, 115, 85, 0.2);
     }
 </style>
 
@@ -385,18 +446,40 @@ export default {
             this.panel = []
         },
         generateTest(){
-            this.answerStatus=[], // 答案正误状态
-            this.showAnalysis=[], // 控制每题解析显示
-            this.answer=[], // 初始化答案数组
+            this.answerStatus = []; // 答案正误状态
+            this.showAnalysis = []; // 控制每题解析显示
+            this.answer = []; // 初始化答案数组
             this.loading = true; // 开始加载动画
             this.items = this.testReq.num;
+
             if(this.items > 0){
                 this.testVisible = true;
             }
-            setTimeout(() => { // 模拟5秒加载
-                axios.post('/api/test/', this.testReq).then(res => {
+
+            // 构建请求数据，映射前端类型到后端类型
+            const requestData = {
+                question_count: this.testReq.num,
+                question_types: this.testReq.type, // 直接使用中文类型名
+                difficulty: this.mapDifficulty(this.testReq.level),
+                topic: this.testReq.desc || '通用知识'
+            };
+
+            console.log('发送测验生成请求:', requestData);
+
+            axios.post('/api/test/', requestData)
+                .then(res => {
+                    console.log('收到测验响应:', res.data);
                     this.question = res.data.AIQuestion;
                     this.showAnalysis = this.question.map(() => false); // 生成新题后重置解析显示
+
+                    // 初始化答案数组
+                    this.answer = this.question.map(q => {
+                        if (q.type === '多选题') {
+                            return []; // 多选题初始化为空数组
+                        }
+                        return ''; // 其他题型初始化为空字符串
+                    });
+
                     // --- 展开动画 ---
                     this.panel = [];
                     let idx = 0;
@@ -409,28 +492,68 @@ export default {
                             clearInterval(expandTimer);
                         }
                     }, 120); // 每120ms展开一个
-                }).finally(() => {
+                })
+                .catch(error => {
+                    console.error('测验生成失败:', error);
+                    this.$message.error('测验生成失败，请重试');
+                })
+                .finally(() => {
                     this.loading = false; // 加载结束，隐藏动画
                 });
-            }, 15000);
+        },
+
+        mapDifficulty(level) {
+            const difficultyMap = {
+                '简单': 'easy',
+                '中等': 'medium',
+                '困难': 'hard'
+            };
+            return difficultyMap[level] || 'medium';
         },
         submitAns() {
-            // window.alert(JSON.stringify(this.answer[4]))
-            this.answerStatus=[], // 答案正误状态
-            this.showAnalysis=[], // 控制每题解析显示
-            // 答案核对
+            // 调用后端API进行答案评判
+            const requestData = {
+                answers: this.answer,
+                questions: this.question
+            };
+
+            axios.post('/api/test/evaluate/', requestData)
+                .then(response => {
+                    const results = response.data.results;
+                    this.answerStatus = results.map(result => result.is_correct);
+
+                    // 显示总体结果
+                    this.$message({
+                        message: response.data.message,
+                        type: 'success',
+                        duration: 3000
+                    });
+                })
+                .catch(error => {
+                    console.error('答案提交失败:', error);
+                    this.$message.error('答案提交失败，请重试');
+
+                    // 降级到本地评判
+                    this.localAnswerEvaluation();
+                });
+        },
+
+        localAnswerEvaluation() {
+            // 本地答案评判（备用方案）
             this.answerStatus = this.question.map((q, i) => {
-                if (typeof this.answer[i] !== 'string'){
-                    if(typeof this.answer[i] === 'object'){
-                        this.answer[i] = this.answer[i].slice().sort();
-                        for(let index=0; index < this.answer[i].length; index++){
-                            if(this.answer[i][index]!=q.answer[index]) return false;
-                        }
-                        return true;
+                const userAnswer = this.answer[i];
+                const correctAnswer = q.answer;
+
+                if (q.type === '多选题') {
+                    if (Array.isArray(userAnswer) && Array.isArray(correctAnswer)) {
+                        const sortedUser = userAnswer.slice().sort();
+                        const sortedCorrect = correctAnswer.slice().sort();
+                        return JSON.stringify(sortedUser) === JSON.stringify(sortedCorrect);
                     }
-                    else return false;
+                    return false;
+                } else {
+                    return String(userAnswer).trim() === String(correctAnswer).trim();
                 }
-                return this.answer[i].trim() === String(q.answer).trim();
             });
         },
         formatQuestion(q) {
@@ -440,6 +563,64 @@ export default {
         getAnalysis() {
             // 显示所有题目的解析
             this.showAnalysis = this.question.map(() => true);
+        },
+        // 选项处理方法
+        getOptionId(option, index) {
+            if (typeof option === 'object' && option.id) {
+                return option.id;
+            }
+            if (typeof option === 'string' && option.match(/^[A-Z]\.\s/)) {
+                return option.charAt(0);
+            }
+            return String.fromCharCode(65 + index); // A, B, C, D...
+        },
+
+        getOptionText(option) {
+            if (typeof option === 'object' && option.text) {
+                return option.text;
+            }
+            if (typeof option === 'string') {
+                // 如果是 "A. 选项内容" 格式，提取内容部分
+                if (option.match(/^[A-Z]\.\s/)) {
+                    return option.substring(3);
+                }
+                return option;
+            }
+            return option;
+        },
+
+        // 单选题选择
+        selectSingleOption(questionIndex, optionId) {
+            this.$set(this.answer, questionIndex, optionId);
+        },
+
+        // 多选题切换
+        toggleMultipleOption(questionIndex, optionId) {
+            if (!this.answer[questionIndex]) {
+                this.$set(this.answer, questionIndex, []);
+            }
+
+            const currentAnswers = this.answer[questionIndex];
+            const index = currentAnswers.indexOf(optionId);
+
+            if (index > -1) {
+                // 已选中，取消选择
+                currentAnswers.splice(index, 1);
+            } else {
+                // 未选中，添加选择
+                currentAnswers.push(optionId);
+            }
+        },
+
+        // 检查多选题是否已选中
+        isMultipleSelected(questionIndex, optionId) {
+            const answers = this.answer[questionIndex];
+            return Array.isArray(answers) && answers.includes(optionId);
+        },
+
+        getOptionValue(option, index) {
+            // 保持向后兼容
+            return this.getOptionId(option, index);
         },
         markMessage(message) {
             if (!message) return '';

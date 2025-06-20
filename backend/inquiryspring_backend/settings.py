@@ -3,8 +3,15 @@ Django settings for InquirySpring Backend.
 """
 
 import os
+import warnings
 from pathlib import Path
 from dotenv import load_dotenv
+
+# 过滤LangChain和Pydantic兼容性警告
+warnings.filterwarnings("ignore", category=UserWarning, module="pydantic")
+warnings.filterwarnings("ignore", message=".*langchain_core.pydantic_v1.*")
+warnings.filterwarnings("ignore", message=".*Mixing V1 models and V2 models.*")
+warnings.filterwarnings("ignore", message=".*Valid config keys have changed in V2.*")
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent

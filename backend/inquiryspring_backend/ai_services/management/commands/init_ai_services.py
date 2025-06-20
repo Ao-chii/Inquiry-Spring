@@ -4,30 +4,68 @@
 import logging
 import os
 from django.core.management.base import BaseCommand
+from django.core.management import call_command
+from django.conf import settings
 from inquiryspring_backend.ai_services.models import AIModel, PromptTemplate
-from inquiryspring_backend.ai_services.rag_engine import initialize_ai_services
+from inquiryspring_backend.ai_services.rag_engine import initialize_ai_services, GENERAL_KNOWLEDGE_DIR
 
 logger = logging.getLogger(__name__)
 
 class Command(BaseCommand):
-    help = '初始化AI服务，创建或更新默认模型和提示词模板'
+    help = '初始化AI服务，包括创建默认模型、提示词模板，并构建通用知识库（如果不存在）'
 
     def handle(self, *args, **options):
         self.stdout.write('开始初始化AI服务...')
         
+        # 1. 创建或更新默认的AI模型配置
         self.create_or_update_default_models()
         
-        # 初始化提示词模板
+        # 2. 初始化提示词模板
+        self.stdout.write("正在初始化提示词模板...")
         from inquiryspring_backend.ai_services.prompt_manager import PromptManager
         PromptManager.create_default_templates()
+        self.stdout.write(self.style.SUCCESS("提示词模板初始化完成。"))
         
-        # 初始化RAG引擎及其他AI服务
-        initialize_ai_services()
+        # 3. 初始化RAG引擎及其他AI服务
+        # initialize_ai_services() # 这个函数主要初始化模板等，上面已做，rag引擎在调用时动态初始化
+
+        # 4. 检查并构建通用知识库
+        self.build_general_knowledge_base_if_needed()
         
-        self.stdout.write(self.style.SUCCESS('AI服务初始化完成!'))
+        self.stdout.write(self.style.SUCCESS('AI服务初始化全部完成!'))
+
+    def build_general_knowledge_base_if_needed(self):
+        """检查通用知识库是否存在，如果不存在则自动构建"""
+        self.stdout.write("正在检查通用知识库状态...")
+
+        # 检查知识库目录是否为空
+        if os.path.exists(GENERAL_KNOWLEDGE_DIR) and os.listdir(GENERAL_KNOWLEDGE_DIR):
+            self.stdout.write(self.style.SUCCESS("通用知识库已存在，跳过构建。"))
+            return
+
+        self.stdout.write(self.style.WARNING("通用知识库不存在或为空，开始自动构建..."))
+        
+        # 定义知识库源文件目录
+        knowledge_source_dir = os.path.join(settings.BASE_DIR, 'knowledge_example')
+
+        if not os.path.exists(knowledge_source_dir):
+            self.stderr.write(self.style.ERROR(f"知识库源文件目录 {knowledge_source_dir} 不存在，无法构建。请确保 'backend/knowledge_example' 目录存在。"))
+            return
+            
+        try:
+            # 调用 build_knowledge_base 命令
+            call_command(
+                'build_knowledge_base',
+                source_dir=knowledge_source_dir,
+                # 可以根据需要添加其他参数，例如 --subjects
+            )
+            self.stdout.write(self.style.SUCCESS("通用知识库构建成功！"))
+        except Exception as e:
+            self.stderr.write(self.style.ERROR(f"自动构建通用知识库失败: {e}"))
     
     def create_or_update_default_models(self):
         """创建或更新默认的AI模型配置"""
+        self.stdout.write("正在创建/更新默认AI模型...")
         # 获取环境变量中的API密钥
         gemini_api_key = os.getenv('GOOGLE_API_KEY', '')
         if not gemini_api_key:
@@ -114,3 +152,4 @@ class Command(BaseCommand):
                 updated_count +=1
         
         self.stdout.write(f"共创建 {created_count} 个AI模型配置，更新/确认 {updated_count} 个AI模型配置。") 
+        self.stdout.write(self.style.SUCCESS("AI模型配置初始化完成。")) 

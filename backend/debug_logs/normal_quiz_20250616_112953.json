@@ -1,0 +1,22 @@
+{
+  "request_type": "normal_quiz",
+  "document_title": "ec54ed02e123c10a88db4626f5e5dfda1.pdf",
+  "document_id": 52,
+  "user_query": "基于文档《ec54ed02e123c10a88db4626f5e5dfda1.pdf》生成1道medium难度的测验题目",
+  "question_count": 1,
+  "difficulty": "medium",
+  "question_types": [
+    "MC",
+    "TF"
+  ],
+  "topic": "",
+  "raw_ai_response": {
+    "text": "```json\n[\n  {\n    \"content\": \"华中科技大学软件学院于2024年3月26日印发的《软件学院 2025年推荐优秀应届本科毕业生免试攻读研究生奖励加分细则》主要涉及以下哪方面内容？\",\n    \"type\": \"MC\",\n    \"options\": [\n      \"A. 计算机科学与技术领域的前沿研究成果发布\",\n      \"B. 软件学院2025年本科生课程设置的调整方案\",\n      \"C. 优秀应届本科毕业生免试攻读研究生时的奖励加分规定\",\n      \"D. 学院教学设施和实验室设备的升级计划\"\n    ],\n    \"correct_answer\": \"C\",\n    \"explanation\": \"根据文件标题“《软件学院 2025年推荐优秀应届本科毕业生免试攻读研究生奖励加分细则》”，其核心内容是关于优秀应届本科毕业生在免试攻读研究生时如何获得奖励加分的具体规定。选项A、B、D与文件主题不符，它们可能是一个计算机学院可能涉及的事务，但并非该特定文件的内容。\",\n    \"difficulty\": \"medium\",\n    \"knowledge_points\": [\n      \"大学行政管理\",\n      \"研究生招生政策\",\n      \"计算机科学教育\"\n    ]\n  }\n]\n```",
+    "tokens_used": 800,
+    "model": "gemini-2.5-flash-preview-05-20",
+    "finish_reason": "stop",
+    "error": "解析或保存测验失败",
+    "quiz_data": []
+  },
+  "timestamp": "2025-06-16T03:29:53.501464+00:00"
+}
