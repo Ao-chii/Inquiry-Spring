@@ -142,6 +142,7 @@ class Command(BaseCommand):
             obj, created = AIModel.objects.update_or_create(
                 provider=model_data['provider'],
                 model_id=model_data['model_id'],
+                name=model_data['name'],
                 defaults=model_data
             )
             if created:
