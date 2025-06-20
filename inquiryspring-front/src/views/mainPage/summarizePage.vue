@@ -52,15 +52,15 @@
             <div class="content-container" style="margin: 10px; padding: 0; background: transparent; box-shadow: none; border: none">
                 <el-row :gutter="20" style="height: 100%">
                     <el-col :span="7.5" style="padding: 10px;">
-                        <div style="height: 100%; padding: 20px; background: white; border-radius: 12px; box-shadow: 0 2px 12px rgba(0,0,0,0.05); display: flex; flex-direction: column;">
+                        <div style="width: 400px; height: 100%; padding: 20px; background: white; border-radius: 12px; box-shadow: 0 2px 12px rgba(0,0,0,0.05); display: flex; flex-direction: column;">
                             <h3 style="margin-bottom: 16px; color: #5a4a3a; display: flex; align-items: center; gap: 8px;">
-                                上传文件
-                                <el-tooltip content="上传的学习材料或学习笔记，生成总结" placement="right">
+                                选择文件
+                                <el-tooltip content="选择您上传的学习材料或学习笔记，生成总结" placement="right">
                                     <i class="el-icon-question" style="color: #8b7355; font-size: 16px;"></i>
                                 </el-tooltip>
                             </h3>
                             <div style="flex: 1; display: flex; flex-direction: column;">
-                                <el-upload
+                                <!-- <el-upload
                                     class="upload-demo"
                                     show-file-list="false"
                                     drag
@@ -72,7 +72,7 @@
                                     <i class="el-icon-upload" style="color: #8b7355; font-size: 48px; margin-bottom: 16px;"></i>
                                     <div class="el-upload__text" style="color: #5a4a3a; font-size: 14px;">将文件拖到此处，或<em style="color: #8b7355;">点击上传</em></div>
                                     <div class="el-upload__tip" slot="tip" style="color: #8b7355; margin-top: 16px;">支持word,pdf格式</div>
-                                </el-upload>
+                                </el-upload> -->
                                 <!-- 新增：已上传文件表格，单独分区 -->
                                 <div v-if="uploadedFiles.length" style="margin: 50px auto 0 auto; padding: 16px 12px; background: #f8f6f2; border-radius: 8px; box-shadow: 0 2px 8px rgba(139,115,85,0.06); border: 1px solid #e8dfc8; width: 95%; max-width: 600px; min-width: 220px; box-sizing: border-box; display: flex; flex-direction: column; align-items: center;">
                                     <div style="font-weight: bold; color: #8b7355; margin-bottom: 10px; font-size: 15px; letter-spacing: 1px; width: 100%; text-align: left;">当前项目文档</div>
@@ -86,7 +86,21 @@
                                     >
                                         <el-table-column prop="name" label="文件名" min-width="120" align="left">
                                             <template slot-scope="scope">
-                                                <i class="el-icon-document" style="margin-right: 6px; color: #8b7355;"></i>{{ scope.row.name }}
+                                                <span :style="scope.row.id === selectedFileId ? 'color: #67c23a;' : 'color: #5a4a3a;'">
+                                                    <i class="el-icon-document" style="margin-right: 6px;" :style="scope.row.id === selectedFileId ? 'color: #67c23a;' : 'color: #8b7355;'"></i>{{ scope.row.name }}
+                                                </span>
+                                            </template>
+                                        </el-table-column>
+                                        <el-table-column label="选择" width="50">
+                                            <template slot-scope="scope">
+                                                <el-radio 
+                                                    v-model="selectedFileId" 
+                                                    :label="scope.row.id"
+                                                    @change="() => onFileRadioChange(scope.row)"
+                                                >
+                                                    <!-- 不显示任何label内容，保持圆圈 -->
+                                                    <span style="display:none">{{scope.row.id}}</span>
+                                                </el-radio>
                                             </template>
                                         </el-table-column>
                                     </el-table>
@@ -101,9 +115,9 @@
                         <div style="height: 100%; padding: 20px; background: white; border-radius: 12px; box-shadow: 0 2px 12px rgba(0,0,0,0.05); display: flex; flex-direction: column;">
                             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
                                 <h3 style="color: #5a4a3a;">总结内容</h3>
-                                <v-btn @click="output" color="#8b7355" style="color: white;">
+                                <!-- <v-btn @click="output" color="#8b7355" style="color: white;">
                                     导出
-                                </v-btn>
+                                </v-btn> -->
                             </div>
                             <div class="markdown-container" style="flex: 1; overflow-y: auto;">
                                 <div v-if="loading" style="display: flex; align-items: center; justify-content: center; height: 100%;">
@@ -282,10 +296,10 @@ export default {
             lineIdx: 0,
             typingLines: [],
             loading: false, // 新增加载动画状态
-            uploadedFiles: [{ name: "ccf2012-b.pdf" }], // 新增：已上传文件列表
-            // currentFiles:["Big_Data_Quality_A_Survey.pdf"],
-            selectedFileRow: null, // 新增：当前选中的文件行对象
-            selectedFileName: '', // 新增：当前选中文件名
+            uploadedFiles: [], // 已上传文件列表
+            selectedFileRow: null, // 当前选中的文件行对象
+            selectedFileName: '', // 当前选中文件名
+            selectedFileId: null, // 新增：当前选中的文件id（用于单选）
             username: '',
             userInitial: '',
         }
@@ -306,6 +320,43 @@ export default {
         } else {
             this.username = '未登录';
             this.userInitial = '?';
+        }
+
+        // 新增：从localStorage恢复当前项目信息，仅同步id和name到store
+        const currentProjectStr = localStorage.getItem('currentProject');
+        let projectId = null;
+        if (currentProjectStr) {
+            try {
+                const currentProject = JSON.parse(currentProjectStr);
+                if (currentProject && currentProject.id && currentProject.name) {
+                    this.$store.dispatch('setCurrentProject', {
+                        id: currentProject.id,
+                        name: currentProject.name
+                    });
+                    projectId = currentProject.id;
+                }
+            } catch (e) {
+                // ignore
+            }
+        }
+
+        // 新增：页面创建时自动请求后端获取当前项目文档列表
+        if (projectId && this.username && this.username !== '未登录') {
+            axios.get(`${this.HOST}/projects/${projectId}/`, {
+                params: {
+                    username: this.username
+                }
+            }).then(res => {
+                if (res.data.data && res.data.data.project && Array.isArray(res.data.data.project.documents)) {
+                    // 只保留文档名，或可根据需要保留更多字段
+                    this.uploadedFiles = res.data.data.project.documents.map(doc => ({
+                        name: doc.title || doc.filename || '',
+                        id:doc.id
+                    }));
+                }
+            }).catch(err => {
+                this.$message.error('获取文档列表失败: ' + (err.response?.data?.error || err.message));
+            });
         }
     },
     mounted() {
@@ -377,6 +428,11 @@ export default {
             this.selectedFileName = row ? row.name : '';
         },
 
+        onFileRadioChange(row) {
+            this.selectedFileRow = row;
+            this.selectedFileName = row.name;
+        },
+
         startLineAnimation(msg) {
             if (this.typingTimer) {
                 clearTimeout(this.typingTimer);
@@ -406,12 +462,12 @@ export default {
             }
         },
         generateSummary(){
-            //window.alert(JSON.stringify(this.selectedFileName))
             this.loading = true;
+            const fileId = this.selectedFileId;
             setTimeout(() => {
                 axios.get(this.url, {
                     params: {
-                        fileName: this.selectedFileName
+                        fileId: fileId
                     }
                 }).then((response) => {
                     this.summarizeMsg = response.data.AIMessage;

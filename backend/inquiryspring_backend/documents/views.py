@@ -174,161 +174,38 @@ class SummarizeView(View):
             return JsonResponse({'error': f'上传失败: {str(e)}'}, status=500)
 
     def get(self, request):
-        """生成文档总结 - 兼容前端调用方式"""
+        """生成文档总结 - 兼容前端调用方式，查找部分只用fileId"""
         try:
-            filename = request.GET.get('fileName')
+            file_id = request.GET.get('fileId')
+            if not file_id:
+                return JsonResponse({'error': '缺少 fileId 参数'}, status=400)
+            try:
+                document = Document.objects.get(id=file_id)
+            except Document.DoesNotExist:
+                return JsonResponse({'error': '文档不存在'}, status=404)
 
-            # 记录请求信息用于调试
-            logger.info(f"收到总结请求，fileName参数: '{filename}'")
-            logger.info(f"完整GET参数: {dict(request.GET)}")
-
-            if not filename or filename.strip() == '':
-                # 如果没有文件名，自动使用最新上传的文档
-                logger.info("fileName参数为空，自动使用最新文档")
-                latest_doc = Document.objects.filter(is_processed=True).order_by('-uploaded_at').first()
-
-                if not latest_doc:
-                    return JsonResponse({
-                        'error': '没有可用的文档',
-                        'message': '请先上传文档'
-                    }, status=404)
-
-                filename = latest_doc.title
-                logger.info(f"自动选择最新文档: {filename}")
-
-                # 直接使用这个文档，不需要再次查找
-                document = latest_doc
-            else:
-                # 智能查找已处理的文档
-                document = None
-
-            # 1. 首先尝试精确匹配title
-            document = Document.objects.filter(title=filename, is_processed=True).first()
-
-            # 2. 如果没找到，尝试通过文件名匹配
-            if not document:
-                # 获取所有已处理的文档，检查其filename属性
-                for doc in Document.objects.filter(is_processed=True):
-                    if doc.filename == filename:
-                        document = doc
-                        break
-
-            # 3. 特殊处理：如果前端传递的是原始文件名，尝试匹配最近上传的文档
-            if not document:
-                # 检查是否是最近上传的文档的原始文件名
-                recent_docs = Document.objects.filter(is_processed=True).order_by('-uploaded_at')[:5]
-                for doc in recent_docs:
-                    # 检查文件路径中是否包含原始文件名
-                    if doc.file and filename in doc.file.name:
-                        document = doc
-                        logger.info(f"通过文件路径匹配找到文档: {filename} -> {doc.title}")
-                        break
-                    # 检查metadata中是否有原始文件名信息
-                    if doc.metadata and isinstance(doc.metadata, dict):
-                        original_name = doc.metadata.get('original_filename', '')
-                        if original_name == filename:
-                            document = doc
-                            logger.info(f"通过metadata匹配找到文档: {filename} -> {doc.title}")
-                            break
-
-            # 4. 如果还没找到，尝试模糊匹配（去掉扩展名）
-            if not document:
-                base_filename = filename.replace('.pdf', '').replace('.docx', '').replace('.txt', '')
-                document = Document.objects.filter(
-                    title__icontains=base_filename,
-                    is_processed=True
-                ).first()
-
-            # 5. 最后尝试通过文件路径匹配
-            if not document:
-                for doc in Document.objects.filter(is_processed=True):
-                    if filename in doc.filename or doc.filename in filename:
-                        document = doc
-                        break
-
-            # 6. 如果仍然没找到，且fileName不为空，尝试使用最新文档
-            if not document and filename.strip():
-                logger.warning(f"无法找到文件 {filename}，尝试使用最新文档")
-                latest_doc = Document.objects.filter(is_processed=True).order_by('-uploaded_at').first()
-                if latest_doc:
-                    document = latest_doc
-                    logger.info(f"使用最新文档代替: {latest_doc.title}")
-                    # 更新filename为实际的文档标题，以便后续处理
-                    filename = latest_doc.title
-
-            if not document:
-                # 记录调试信息
-                logger.warning(f"未找到文件: {filename}")
-                available_docs = Document.objects.filter(is_processed=True).order_by('-uploaded_at')[:5]
-                doc_list = []
-                for doc in available_docs:
-                    doc_list.append({
-                        'title': doc.title,
-                        'filename': doc.filename,
-                        'id': doc.id
-                    })
-                logger.warning(f"可用文档: {doc_list}")
-
-                return JsonResponse({
-                    'error': f'文档不存在: {filename}',
-                    'message': '请检查文件名是否正确',
-                    'available_documents': doc_list,
-                    'searched_filename': filename
-                }, status=404)
 
             if not document.content:
-                return JsonResponse({'error': '文档内容为空'}, status=404)
-
-            # 如果已有总结，直接返回
+                return JsonResponse({'error': '文档内容为空'}, status=400)
             if document.summary:
-                logger.info(f"返回已有总结: {filename}")
-                response_data = {
-                    'AIMessage': document.summary,
-                    'filename': filename,
-                    'model': 'cached',
-                    'provider': 'cached'
-                }
-                return JsonResponse(response_data)
-
-            # 确保文档被正确处理和向量化
-            from ..ai_services import process_document_for_rag
-            rag_processed = process_document_for_rag(document.id, force_reprocess=True)
-
-            if not rag_processed:
-                logger.warning(f"文档 {document.id} RAG处理失败，但继续生成总结")
-
-            # 使用AI生成总结
-            from ..ai_services.rag_engine import RAGEngine
-            rag_engine = RAGEngine(document_id=document.id)
-            summary_result = rag_engine.handle_summary(
-                document_id=document.id,
-                user=getattr(request, 'user', None),
-                session_id=request.session.session_key
-            )
-
-            if 'error' in summary_result:
-                summary = f"总结生成失败: {summary_result['error']}"
-                logger.error(f"文档总结生成失败: {summary_result['error']}")
+                summary = document.summary
             else:
-                summary = summary_result.get("text", "无法生成总结")
-                logger.info(f"文档总结生成成功: {filename}")
-
-            # 保存总结
-            document.summary = summary
-            document.save()
-
-            logger.info(f"文档总结生成成功: {filename}")
-
-            # 确保响应格式兼容前端期望
+                rag_engine = RAGEngine(document_id=document.id)
+                summary_result = rag_engine.handle_summary(document_id=document.id)
+                if 'error' in summary_result:
+                    return JsonResponse({'error': summary_result['error']}, status=500)
+                summary = summary_result.get('text', '')
+                document.summary = summary
+                document.save()
+            logger.info(f"文档总结生成成功: {document.title}")
             response_data = {
                 'AIMessage': summary,
-                'filename': filename,
-                'model': summary_result.get('model', ''),
-                'provider': summary_result.get('provider', '')
+                'filename': document.title,
+                'document_id': document.id,
+                'model': getattr(document, 'model', ''),
+                'provider': getattr(document, 'provider', '')
             }
-
             return JsonResponse(response_data)
-
         except Exception as e:
             logger.error(f"文档总结失败: {e}")
             return JsonResponse({'error': f'总结失败: {str(e)}'}, status=500)

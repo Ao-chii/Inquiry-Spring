@@ -109,17 +109,34 @@ def project_detail(request, project_id):
     
     if request.method == 'GET':
         try:
-            # 获取项目文档
+            # 校验 username 参数，只有项目 owner 才能访问
+            username = request.GET.get('username', '').strip()
+            if username:
+                from django.contrib.auth.models import User
+                try:
+                    user = User.objects.get(username=username)
+                except User.DoesNotExist:
+                    return Response({'error': '用户不存在'}, status=status.HTTP_404_NOT_FOUND)
+                if project.user != user:
+                    return Response({'error': '无权访问该项目'}, status=status.HTTP_403_FORBIDDEN)
+            # 先查 ProjectDocument 表获取文档索引，再查 Document 表
+            from ..documents.models import Document
+            project_docs = ProjectDocument.objects.filter(project=project)
             documents = []
-            for proj_doc in project.documents.all():
-                documents.append({
-                    'id': proj_doc.document.id,
-                    'title': proj_doc.document.title,
-                    'filename': proj_doc.document.filename,
-                    'is_primary': proj_doc.is_primary,
-                    'added_at': proj_doc.added_at.isoformat()
-                })
-            
+            for proj_doc in project_docs:
+                try:
+                    doc = Document.objects.get(id=proj_doc.document_id)
+                    documents.append({
+                        'id': doc.id,
+                        'title': doc.title,
+                        'filename': doc.filename if hasattr(doc, 'filename') else '',
+                        'size': f"{doc.file_size // 1024}KB" if getattr(doc, 'file_size', None) else "未知",
+                        'uploadTime': doc.uploaded_at.strftime('%Y-%m-%d %H:%M') if getattr(doc, 'uploaded_at', None) else "未知",
+                        'is_primary': proj_doc.is_primary,
+                        'added_at': proj_doc.added_at.isoformat()
+                    })
+                except Document.DoesNotExist:
+                    continue
             # 获取统计信息
             try:
                 stats = project.stats
@@ -138,7 +155,6 @@ def project_detail(request, project_id):
                     'completion_rate': 0.0,
                     'last_activity': project.updated_at.isoformat()
                 }
-            
             return Response({
                 'project': {
                     'id': project.id,
@@ -150,7 +166,6 @@ def project_detail(request, project_id):
                     'stats': stats_data
                 }
             })
-            
         except Exception as e:
             logger.error(f"获取项目详情失败: {e}")
             return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -196,30 +211,108 @@ def project_detail(request, project_id):
 
 @api_view(['POST'])
 def project_add_document(request, project_id):
-    """向项目添加文档"""
+    """向项目添加文档，支持直接上传文件或通过文档ID添加"""
+    from ..documents.models import Document
+    from ..documents.document_processor import document_processor
+    from ..ai_services.rag_engine import RAGEngine
+    from django.conf import settings
+    import os
+    import re
+    project = get_object_or_404(Project, id=project_id, is_active=True)
     try:
-        project = get_object_or_404(Project, id=project_id, is_active=True)
+        # 如果有文件上传，走上传逻辑
+        if 'file' in request.FILES:
+            file = request.FILES['file']
+            if file.name == '':
+                return Response({'error': '没有选择文件'}, status=status.HTTP_400_BAD_REQUEST)
+            # 文件名安全处理
+            filename = re.sub(r'[^\w\s\-\.]', '', file.name).strip()
+            filename = re.sub(r'[\-\s]+', '_', filename)
+            upload_dir = os.path.join(settings.MEDIA_ROOT, 'uploads')
+            os.makedirs(upload_dir, exist_ok=True)
+            file_path = os.path.join(upload_dir, filename)
+            with open(file_path, 'wb+') as destination:
+                for chunk in file.chunks():
+                    destination.write(chunk)
+            # 验证文件
+            validation = document_processor.validate_file(file_path, filename)
+            if not validation['valid']:
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+                return Response({'error': validation['error']}, status=status.HTTP_400_BAD_REQUEST)
+            # 创建Document记录
+            document = Document.objects.create(
+                title=filename,
+                file_type=validation['file_type'],
+                file_size=validation['file_size'],
+                processing_status='processing'
+            )
+            # 移动文件到最终位置
+            final_dir = os.path.join(settings.MEDIA_ROOT, 'documents', str(document.id))
+            os.makedirs(final_dir, exist_ok=True)
+            final_path = os.path.join(final_dir, filename)
+            os.rename(file_path, final_path)
+            document.file.name = f'documents/{document.id}/{filename}'
+            document.save()
+            # 提取文档内容
+            extraction_result = document_processor.extract_text(final_path, filename)
+            if extraction_result['success']:
+                document.content = extraction_result['content']
+                metadata = extraction_result['metadata'] or {}
+                metadata['original_filename'] = file.name
+                document.metadata = metadata
+                document.is_processed = True
+                document.processing_status = 'completed'
+                document.processed_at = timezone.now()
+                document.save()
+                # RAG处理
+                try:
+                    from ..ai_services import process_document_for_rag
+                    rag_processing_result = process_document_for_rag(document.id, force_reprocess=True)
+                except Exception as e:
+                    rag_processing_result = False
+                # 建立项目与文档的关联
+                ProjectDocument.objects.create(
+                    project=project,
+                    document=document,
+                    is_primary=False
+                )
+                # 更新统计
+                try:
+                    stats = project.stats
+                    stats.total_documents = project.documents.count()
+                    stats.save()
+                except ProjectStats.DoesNotExist:
+                    ProjectStats.objects.create(
+                        project=project,
+                        total_documents=project.documents.count()
+                    )
+                url = document.file.url if hasattr(document.file, 'url') else ''
+                return Response({
+                    'message': '文档上传并关联成功',
+                    'document_id': document.id,
+                    'filename': file.name,
+                    'url': url
+                })
+            else:
+                document.processing_status = 'failed'
+                document.error_message = extraction_result['error']
+                document.save()
+                return Response({'error': f'文档处理失败: {extraction_result["error"]}'}, status=500)
+        # 否则走原有文档ID添加逻辑
         data = request.data
         document_id = data.get('document_id')
         is_primary = data.get('is_primary', False)
-        
         if not document_id:
             return Response({'error': '缺少文档ID'}, status=status.HTTP_400_BAD_REQUEST)
-        
-        from ..documents.models import Document
         document = get_object_or_404(Document, id=document_id)
-        
-        # 检查是否已存在
         if ProjectDocument.objects.filter(project=project, document=document).exists():
             return Response({'error': '文档已在项目中'}, status=status.HTTP_400_BAD_REQUEST)
-        
-        # 添加文档
         ProjectDocument.objects.create(
             project=project,
             document=document,
             is_primary=is_primary
         )
-        
         # 更新统计
         try:
             stats = project.stats
@@ -230,9 +323,7 @@ def project_add_document(request, project_id):
                 project=project,
                 total_documents=project.documents.count()
             )
-        
         return Response({'message': '文档添加成功'})
-        
     except Exception as e:
         logger.error(f"添加文档到项目失败: {e}")
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -241,48 +332,94 @@ def project_add_document(request, project_id):
 @csrf_exempt
 @api_view(['POST'])
 def project_upload_document(request, project_id):
-    """为项目上传文档并存储到数据库，保存文件并建立项目-文档关联，接口与el-upload兼容"""
+    """为项目上传文档并存储到数据库，保存文件并建立项目-文档关联，接口与el-upload兼容，处理逻辑与SummarizeView.post一致"""
     from ..documents.models import Document
+    from ..documents.document_processor import document_processor
+    from ..ai_services.rag_engine import RAGEngine
     from django.conf import settings
+    import os
+    import re
+    project = get_object_or_404(Project, id=project_id, is_active=True)
     try:
-        project = get_object_or_404(Project, id=project_id, is_active=True)
         if 'file' not in request.FILES:
             return Response({'error': '没有选择文件'}, status=status.HTTP_400_BAD_REQUEST)
         file = request.FILES['file']
         if file.name == '':
             return Response({'error': '没有选择文件'}, status=status.HTTP_400_BAD_REQUEST)
-        # 直接用Django FileField保存文件，避免手动赋值filename
+        # 文件名安全处理
+        filename = re.sub(r'[^\w\s\-\.]', '', file.name).strip()
+        filename = re.sub(r'[\-\s]+', '_', filename)
+        upload_dir = os.path.join(settings.MEDIA_ROOT, 'uploads')
+        os.makedirs(upload_dir, exist_ok=True)
+        file_path = os.path.join(upload_dir, filename)
+        with open(file_path, 'wb+') as destination:
+            for chunk in file.chunks():
+                destination.write(chunk)
+        # 验证文件
+        validation = document_processor.validate_file(file_path, filename)
+        if not validation['valid']:
+            if os.path.exists(file_path):
+                os.remove(file_path)
+            return Response({'error': validation['error']}, status=status.HTTP_400_BAD_REQUEST)
+        # 创建Document记录
         document = Document.objects.create(
-            title=file.name,
-            file=file,
-            file_size=file.size,
-            uploaded_at=timezone.now(),
-            is_processed=True  # 可根据实际处理流程调整
+            title=filename,
+            file_type=validation['file_type'],
+            file_size=validation['file_size'],
+            processing_status='processing'
         )
-        # 建立项目与文档的关联
-        ProjectDocument.objects.create(
-            project=project,
-            document=document,
-            is_primary=False
-        )
-        # 更新统计
-        try:
-            stats = project.stats
-            stats.total_documents = project.documents.count()
-            stats.save()
-        except ProjectStats.DoesNotExist:
-            ProjectStats.objects.create(
+        # 移动文件到最终位置
+        final_dir = os.path.join(settings.MEDIA_ROOT, 'documents', str(document.id))
+        os.makedirs(final_dir, exist_ok=True)
+        final_path = os.path.join(final_dir, filename)
+        os.rename(file_path, final_path)
+        document.file.name = f'documents/{document.id}/{filename}'
+        document.save()
+        # 提取文档内容
+        extraction_result = document_processor.extract_text(final_path, filename)
+        if extraction_result['success']:
+            document.content = extraction_result['content']
+            metadata = extraction_result['metadata'] or {}
+            metadata['original_filename'] = file.name
+            document.metadata = metadata
+            document.is_processed = True
+            document.processing_status = 'completed'
+            document.processed_at = timezone.now()
+            document.save()
+            # RAG处理
+            try:
+                from ..ai_services import process_document_for_rag
+                rag_processing_result = process_document_for_rag(document.id, force_reprocess=True)
+            except Exception as e:
+                rag_processing_result = False
+            # 建立项目与文档的关联
+            ProjectDocument.objects.create(
                 project=project,
-                total_documents=project.documents.count()
+                document=document,
+                is_primary=False
             )
-        # 返回文件url
-        url = document.file.url if hasattr(document.file, 'url') else ''
-        return Response({
-            'message': '文档上传并关联成功',
-            'document_id': document.id,
-            'filename': file.name,
-            'url': url
-        })
+            # 更新统计
+            try:
+                stats = project.stats
+                stats.total_documents = project.documents.count()
+                stats.save()
+            except ProjectStats.DoesNotExist:
+                ProjectStats.objects.create(
+                    project=project,
+                    total_documents=project.documents.count()
+                )
+            url = document.file.url if hasattr(document.file, 'url') else ''
+            return Response({
+                'message': '文档上传并关联成功',
+                'document_id': document.id,
+                'filename': file.name,
+                'url': url
+            })
+        else:
+            document.processing_status = 'failed'
+            document.error_message = extraction_result['error']
+            document.save()
+            return Response({'error': f'文档处理失败: {extraction_result["error"]}'}, status=500)
     except Exception as e:
         logger.error(f"项目上传文档失败: {e}")
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

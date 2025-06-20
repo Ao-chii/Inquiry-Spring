@@ -104,7 +104,7 @@
               <p style="color: #8b7355; margin: 0;">{{ currentProject.description }}</p>
             </div>
             
-            <div class="upload-section" style="background: #f9f5ee; padding: 20px; border-radius: 8px; margin-bottom: 10px;">
+            <div class="upload-section" style="background: #f9f5ee; padding: 20px; border-radius: 8px; margin-bottom: 10px; position: relative;">
               <h3 style="color: #5a4a3a; margin-bottom: 15px; border-bottom: 1px solid #e0d6c2; padding-bottom: 10px;">上传新文档</h3>
               <el-upload
                 class="upload-demo"
@@ -240,7 +240,8 @@ export default {
       },
       // 项目列表数据
       projects: [],
-      isSubmitting: false
+      isSubmitting: false,
+      uploadLoading: false // 新增：文档上传loading状态
     }
   },
   computed: {
@@ -269,16 +270,13 @@ export default {
     }
   },
   methods: {
-    // 上传文件前的校验
-    beforeUpload(file) {
-      const isLt10M = file.size / 1024 / 1024 < 10;
-      if (!isLt10M) {
-        this.$message.error('上传文件大小不能超过10MB!');
-      }
-      return isLt10M;
-    },
     // 文件上传成功处理
     handleUploadSuccess(response, file) {
+      if (this.uploadLoadingInstance) {
+        this.uploadLoadingInstance.close();
+        this.uploadLoadingInstance = null;
+      }
+      this.uploadLoading = false;
       if (response.data && response.data.document_id) {
         // 上传成功后将文档加入当前项目文档列表
         if (this.currentProject && Array.isArray(this.currentProject.documents)) {
@@ -293,6 +291,23 @@ export default {
       } else {
         this.$message.error(response?.error || `${file.name} 上传失败`);
       }
+    },
+    // 上传文件前的校验
+    beforeUpload(file) {
+      const isLt10M = file.size / 1024 / 1024 < 10;
+      if (!isLt10M) {
+        this.$message.error('上传文件大小不能超过10MB!');
+      }
+      if (isLt10M) {
+        this.uploadLoading = true;
+        // 全局遮罩
+        this.uploadLoadingInstance = this.$loading({
+          lock: true,
+          text: '正在处理上传文档，请稍候...',
+          background: 'rgba(255,255,255,0.7)'
+        });
+      }
+      return isLt10M;
     },
     // 提交项目表单
     submitProject() {
@@ -331,7 +346,8 @@ export default {
     openProject(row) {
       //将当前项目状态信息存入store
       this.$store.dispatch('setCurrentProject', row);
-
+      // 同步存入localStorage
+      localStorage.setItem('currentProject', JSON.stringify(row));
       this.$message.info(`打开项目: ${row.name}`);
       this.$router.push({ path: '/chat', query: { id: row.id } });
       // 实际应用中这里应该跳转到项目详情页
