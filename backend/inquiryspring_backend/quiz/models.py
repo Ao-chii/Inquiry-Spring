@@ -23,6 +23,9 @@ class Quiz(models.Model):
     difficulty = models.CharField('难度', max_length=20, default='medium')
     question_types = models.JSONField('题目类型', default=list)
 
+    # 元数据字段 - ai_services需要
+    metadata = models.JSONField('元数据', default=dict, blank=True)
+
     # 状态
     is_active = models.BooleanField('是否活跃', default=True)
 

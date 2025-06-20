@@ -9,6 +9,9 @@ urlpatterns = [
     # 测验提交
     path('submit/', views.quiz_submit, name='quiz_submit'),
 
+    # 答案评判
+    path('evaluate/', views.evaluate_answers, name='evaluate_answers'),
+
     # 测验历史
     path('history/', views.quiz_history, name='quiz_history'),
 
