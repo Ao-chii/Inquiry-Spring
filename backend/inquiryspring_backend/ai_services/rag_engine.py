@@ -29,14 +29,19 @@ from inquiryspring_backend.quiz.models import Quiz, Question
 from django.conf import settings
 from .structured_output import StructuredOutputProcessor, ChatResponse, Quiz as QuizModel, SummaryResponse
 
+# Graph-related imports for Knowledge Graph Retriever
+import networkx as nx
+from langchain.graphs import NetworkxEntityGraph
+
+# Import Neo4j knowledge graph manager
+from .neo4j_manager import _GLOBAL_NEO4J, initialize_neo4j
+from .graph_retriever import KnowledgeGraphRetriever # Import the new retriever
+
 logger = logging.getLogger(__name__)
 
 # 用户知识库存储目录
 VECTOR_STORE_DIR = os.path.join(settings.BASE_DIR, "vector_store")
-# 通用知识库存储目录
-GENERAL_KNOWLEDGE_DIR = os.path.join(settings.BASE_DIR, "general_knowledge")
 os.makedirs(VECTOR_STORE_DIR, exist_ok=True)
-os.makedirs(GENERAL_KNOWLEDGE_DIR, exist_ok=True)
 
 
 # ---- 全局嵌入模型单例 ----
@@ -79,7 +84,7 @@ class RAGEngine:
     DEFAULT_CONFIG = {
         'chunk_size': 1000, 'chunk_overlap': 100, 'initial_retrieval_k': 20, # 初始检索阶段（BM25+向量），每个检索器召回的数量
         'top_n_rerank': 5,         # 重排后，最终选择的文档数量
-        'ensemble_weights': [0.5, 0.5], # 混合检索权重 [BM25, Vector]
+        'ensemble_weights': [0.3, 0.4, 0.3], # 混合检索权重 [BM25, Vector, Graph]
         'vector_store_dir': VECTOR_STORE_DIR, 'default_question_count': 5,
         'default_question_types': ['MC', 'TF'], 'default_difficulty': 'medium',
         'structured_output': True,  # 是否使用结构化输出处理
@@ -89,6 +94,7 @@ class RAGEngine:
     def __init__(self, document_id: int = None, llm_client = None, config: Dict = None):
         self.document = None
         self.retriever = None  # 将使用带重排的混合检索器
+        self.graph = None      # 不再使用内存中的图谱，而是Neo4j
         self.config = {**self.DEFAULT_CONFIG, **(config or {})}
         
         if document_id:
@@ -107,10 +113,6 @@ class RAGEngine:
             )
         else:
             self.output_processor = None
-        
-        # 初始化通用知识库检索器
-        self.kb_retriever = None
-        self.init_general_knowledge_base()
         
         if self.document and self.document.is_processed:
             self._initialize_retrievers()
@@ -139,22 +141,22 @@ class RAGEngine:
         }
         
         # 使用混合检索获取上下文
-        retrieved_results = self.retrieve_with_hybrid_sources(rewritten_query)
+        doc_chunks = self.retrieve_relevant_chunks(rewritten_query) if self.document else []
+        retrieved_results = []
+        if doc_chunks:
+            retrieved_results = [{
+                'content': chunk.content,
+                'source_type': 'document',
+                'source_id': chunk.id,
+                'document_title': self.document.title if self.document else None,
+                'chunk_index': chunk.chunk_index,
+                'metadata': {'chunk_id': str(chunk.id), 'document_id': str(self.document.id)}
+            } for chunk in doc_chunks]
+        
         has_context = bool(retrieved_results)
 
         if has_context:
             prompt_vars['reference_text'] = "\n\n---\n\n".join([r['content'] for r in retrieved_results])
-            
-            # 为LLM的溯源功能准备source信息
-            sources_for_prompt = []
-            for i, r in enumerate(retrieved_results):
-                source_info = {
-                    'id': i + 1,
-                    'type': r['source_type'],
-                    'title': r['document_title']
-                }
-                sources_for_prompt.append(source_info)
-            prompt_vars['sources_info'] = sources_for_prompt # 添加到prompt变量中
 
         # 获取聊天示例
         chat_examples = PromptManager._get_or_create_examples('chat')
@@ -185,7 +187,6 @@ class RAGEngine:
                 # 返回验证后的结构化结果
                 result = {
                     'answer': validated_response.answer,
-                    'sources': validated_response.sources if validated_response.sources else [],
                     'processing_time': time.time() - start_time,
                     'is_generic_answer': not has_context,
                     'error': llm_response.get('error')
@@ -194,7 +195,6 @@ class RAGEngine:
                 logger.warning(f"结构化输出验证失败: {str(e)}，回退到非结构化输出")
                 result = {
                     'answer': llm_response.get('text', '无法生成回答'),
-                    'sources': retrieved_results, # 回退时返回原始检索结果
                     'processing_time': time.time() - start_time,
                     'is_generic_answer': not has_context,
                     'error': llm_response.get('error') or str(e)
@@ -203,7 +203,6 @@ class RAGEngine:
             # 原始非结构化输出处理
             result = {
                 'answer': llm_response.get('text', '无法生成回答'),
-                'sources': retrieved_results, # 返回原始检索结果
                 'processing_time': time.time() - start_time,
                 'is_generic_answer': not has_context,
                 'error': llm_response.get('error')
@@ -242,19 +241,23 @@ class RAGEngine:
         log_context = {'user': user, 'session_id': session_id, 'document': self.document}
         
         # 使用混合检索获取上下文
-        retrieved_results = self.retrieve_with_hybrid_sources(params['topic'])
+        doc_chunks = self.retrieve_relevant_chunks(params['topic']) if self.document else []
+        retrieved_results = []
+        if doc_chunks:
+            retrieved_results = [{
+                'content': chunk.content,
+                'source_type': 'document',
+                'source_id': chunk.id,
+                'document_title': self.document.title,
+                'chunk_index': chunk.chunk_index,
+                'metadata': {'chunk_id': str(chunk.id), 'document_id': str(self.document.id)}
+            } for chunk in doc_chunks]
         
         # 准备提示词变量
         prompt_vars = {**params}
         if retrieved_results:
             prompt_vars['reference_text'] = "\n\n".join([r['content'] for r in retrieved_results])
-            source_types = {r['source_type'] for r in retrieved_results}
-            if 'document' in source_types and 'knowledge_base' in source_types:
-                prompt_vars['knowledge_source'] = "文档和通用知识库"
-            elif 'document' in source_types:
-                prompt_vars['knowledge_source'] = "文档"
-            else:
-                prompt_vars['knowledge_source'] = "通用知识库"
+            prompt_vars['knowledge_source'] = "文档"
         else:
             logger.warning(f"在任何来源中都未找到与'{params['topic']}'相关的内容，将使用模型的固有知识")
             prompt_vars['reference_text'] = ""
@@ -381,9 +384,35 @@ class RAGEngine:
             
             persist_dir = os.path.join(self.config['vector_store_dir'], str(self.document.id))
             document_chunks = list(self.document.chunks.all())
-            metadatas = [{'chunk_id': str(c.id)} for c in document_chunks]
-            vector_store = Chroma.from_texts([c.content for c in document_chunks], self.embeddings, metadatas=metadatas, persist_directory=persist_dir)
+            langchain_docs = [LangchainDocument(page_content=c.content, metadata={'chunk_id': str(c.id)}) for c in document_chunks]
+            
+            # 创建向量存储
+            vector_store = Chroma.from_texts([c.content for c in document_chunks], self.embeddings, metadatas=[d.metadata for d in langchain_docs], persist_directory=persist_dir)
             vector_store.persist()
+
+            # ---- 新增：使用Neo4j构建知识图谱 ----
+            try:
+                logger.info("开始构建Neo4j知识图谱...")
+                if _GLOBAL_NEO4J and _GLOBAL_NEO4J.is_connected():
+                    # 确保LLM模型能够与LangChain兼容
+                    llm = self.llm_client.llm if hasattr(self.llm_client, 'llm') else self.llm_client
+                    
+                    # 使用Neo4j处理文档实体和关系
+                    success = _GLOBAL_NEO4J.process_entities_from_llm(
+                        langchain_docs=langchain_docs,
+                        llm=llm,
+                        document_id=str(self.document.id)
+                    )
+                    
+                    if success:
+                        logger.info(f"Neo4j知识图谱构建成功，文档ID: {self.document.id}")
+                    else:
+                        logger.warning(f"Neo4j知识图谱构建失败，文档ID: {self.document.id}")
+                else:
+                    logger.warning("Neo4j数据库未连接，跳过知识图谱构建")
+            except Exception as e:
+                logger.exception(f"构建Neo4j知识图谱失败: {e}")
+            # ---- 结束新增 ----
 
             self.document.is_processed = True
             self.document.save()
@@ -568,18 +597,57 @@ class RAGEngine:
             vector_store = Chroma(persist_directory=persist_dir, embedding_function=self.embeddings)
             vector_retriever = vector_store.as_retriever(search_kwargs={"k": k})
         else:
-            logger.warning(f"未找到文档 {self.document.id} 的向量存储。混合检索将只依赖BM25。")
+            logger.warning(f"未找到文档 {self.document.id} 的向量存储。向量检索将不可用。")
 
-        # 3. 组合成基础的混合检索器
+        # 3. 初始化所有可用的基础检索器
+        all_retrievers = []
+        if bm25_retriever:
+            all_retrievers.append(bm25_retriever)
         if vector_retriever:
-            base_retriever = EnsembleRetriever(
-                retrievers=[bm25_retriever, vector_retriever],
-                weights=self.config['ensemble_weights']
-            )
-        else: # 回退到只有BM25
-            base_retriever = bm25_retriever
+            all_retrievers.append(vector_retriever)
         
-        # 4. 如果重排模型加载成功，则创建带重排的压缩检索器
+        # 添加知识图谱检索器（如果Neo4j连接可用）
+        # 如果Neo4j还未初始化，尝试初始化一次
+        if _GLOBAL_NEO4J is None:
+            logger.info("Neo4j尚未初始化，尝试即时初始化...")
+            initialize_neo4j()
+            
+        if _GLOBAL_NEO4J and _GLOBAL_NEO4J.is_connected():
+            try:
+                # 注意这里不再传入 graph 参数，而是传入 document_id
+                graph_retriever = KnowledgeGraphRetriever(
+                    document_id=str(self.document.id),
+                    k=k,
+                    llm_client=self.llm_client # 传递LLM客户端实例
+                )
+                all_retrievers.append(graph_retriever)
+                logger.info(f"Neo4j知识图谱检索器已为文档 {self.document.id} 初始化。")
+            except Exception as e:
+                logger.error(f"初始化Neo4j知识图谱检索器失败: {e}")
+
+        # 4. 组合成基础的混合检索器（如果多于一个检索器）
+        if not all_retrievers:
+            logger.error(f"文档 {self.document.id} 没有任何可用的检索器。")
+            return
+            
+        if len(all_retrievers) > 1:
+            # 动态调整权重
+            num_retrievers = len(all_retrievers)
+            configured_weights = self.config.get('ensemble_weights', [])
+            weights = configured_weights[:num_retrievers]
+            # 如果权重数量不匹配，则使用平均权重
+            if len(weights) != num_retrievers:
+                weights = [1/num_retrievers] * num_retrievers
+                logger.warning(f"配置的检索器权重与可用检索器数量不匹配，将使用平均权重: {weights}")
+
+            base_retriever = EnsembleRetriever(
+                retrievers=all_retrievers,
+                weights=weights
+            )
+        else:
+            base_retriever = all_retrievers[0]
+        
+        # 5. 如果重排模型加载成功，则创建带重排的压缩检索器
         if _GLOBAL_RERANKER:
             compressor = CrossEncoderReranker(model=_GLOBAL_RERANKER, top_n=self.config.get('top_n_rerank', 5))
             self.retriever = ContextualCompressionRetriever(
@@ -791,74 +859,6 @@ class RAGEngine:
             # 出错时返回简单描述
             return f"早先的对话包含了{len(conversation_turns)}轮交流。"
 
-    def init_general_knowledge_base(self):
-        """初始化通用知识库检索器"""
-        if os.path.exists(GENERAL_KNOWLEDGE_DIR):
-            try:
-                # 检查知识库是否已经存在
-                if os.listdir(GENERAL_KNOWLEDGE_DIR):
-                    # 加载通用知识库的向量存储
-                    kb_vector_store = Chroma(
-                        persist_directory=GENERAL_KNOWLEDGE_DIR,
-                        embedding_function=self.embeddings
-                    )
-                    
-                    # 使用向量存储创建检索器，配置相同的重排参数
-                    self.kb_retriever = kb_vector_store.as_retriever(
-                        search_kwargs={"k": self.config.get('top_n_rerank', 5)}
-                    )
-                    
-                    # 如果有重排模型，应用与文档检索相同的重排策略
-                    if _GLOBAL_RERANKER:
-                        compressor = CrossEncoderReranker(
-                            model=_GLOBAL_RERANKER, 
-                            top_n=self.config.get('top_n_rerank', 5)
-                        )
-                        self.kb_retriever = ContextualCompressionRetriever(
-                            base_compressor=compressor,
-                            base_retriever=self.kb_retriever
-                        )
-                    
-                    logger.info("通用知识库检索器已初始化")
-                else:
-                    logger.warning("通用知识库目录存在但为空，暂不可用")
-            except Exception as e:
-                logger.error(f"初始化通用知识库失败: {str(e)}")
-                self.kb_retriever = None
-        else:
-            logger.info("通用知识库不存在，跳过初始化")
-            self.kb_retriever = None
-
-    def retrieve_from_knowledge_base(self, query: str) -> List[Dict[str, Any]]:
-        """从通用知识库检索相关内容
-        
-        Args:
-            query: 查询文本
-            
-        Returns:
-            知识库检索结果列表，每项包含内容和元数据
-        """
-        if not self.kb_retriever:
-            logger.warning("通用知识库检索器未初始化，无法执行检索")
-            return []
-            
-        try:
-            results = self.kb_retriever.get_relevant_documents(query)
-            
-            # 将LangChain文档对象转换为带有源信息的字典
-            processed_results = []
-            for idx, doc in enumerate(results):
-                processed_results.append({
-                    'content': doc.page_content,
-                    'metadata': doc.metadata,
-                    'id': idx + 1  # 为了与文档块ID保持一致的引用方式
-                })
-                
-            return processed_results
-        except Exception as e:
-            logger.exception(f"从通用知识库检索失败: {str(e)}")
-            return []
-
     def _save_quiz_to_db(self, quiz_data: List[Dict], topic: str, difficulty: str) -> Optional[int]:
         """将通过验证的测验数据保存到数据库。"""
         if not quiz_data:
@@ -898,7 +898,13 @@ class RAGEngine:
             return None
 
 def initialize_ai_services():
-    """初始化所有AI服务相关组件"""
+    """
+    [已弃用] 初始化所有AI服务相关组件 
+    
+    此函数已被移动到management/commands/init_ai_services.py中的Command类实现
+    请使用init_ai_services管理命令代替
+    """
+    logger.warning("调用已弃用的initialize_ai_services()函数。请使用'init_ai_services'管理命令代替。")
     try:
         # 初始化提示词模板
         from .prompt_manager import PromptManager

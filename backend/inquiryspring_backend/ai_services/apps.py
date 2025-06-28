@@ -20,14 +20,15 @@ class AiServicesConfig(AppConfig):
         def initialize_services():
             try:
                 # 延迟导入，避免循环依赖
-                from .rag_engine import initialize_ai_services
+                from .management.commands.init_ai_services import Command as InitCommand
                 
                 # 检查相关表是否存在
                 table_names = connection.introspection.table_names()
                 if 'ai_services_aimodel' in table_names and 'ai_services_prompttemplate' in table_names:
                     logger.info("开始初始化AI服务...")
-                    # 调用rag_engine中的综合初始化函数
-                    initialize_ai_services()
+                    # 使用CommandClass中的初始化方法
+                    init_cmd = InitCommand()
+                    init_cmd.initialize_ai_services()
                     logger.info("AI服务初始化完成")
                 else:
                     logger.warning("数据库表尚未创建，跳过AI服务初始化")
