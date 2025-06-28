@@ -60,15 +60,11 @@ class PromptManager:
             # 动态处理 RAG 和对话历史的占位符
             if '$reference_text_section' in template_content:
                 if variables.get('reference_text'):
-                    # 获取知识来源标识，如果存在
-                    knowledge_source = variables.get('knowledge_source', '参考资料')
-                    # 根据知识来源类型设置不同的标题
-                    variables['reference_text_section'] = f"{knowledge_source}:\n{variables['reference_text']}"
-                    
+                    # 简化了知识来源的逻辑，统一使用"参考资料"作为标题
+                    variables['reference_text_section'] = f"参考资料:\n{variables['reference_text']}"
                     variables['reference_instruction'] = "请严格根据上面提供的参考资料来回答问题。"
                 else:
                     variables['reference_text_section'] = ""
-                    variables['reference_instruction'] = "基于你的知识提供最准确的回答。"
             
             if '$conversation_history_section' in template_content:
                 if variables.get('conversation_history'):
@@ -257,8 +253,7 @@ class PromptManager:
             }]
         elif example_type == 'chat':
             examples = [{
-                "answer": "根据参考资料，二氧化碳是一种无色无味的气体，是地球温室效应的主要贡献者之一。在常温常压下，二氧化碳以气态存在，分子式为CO₂。工业上，它被广泛用于饮料碳酸化、灭火器和制冷（干冰）等领域。",
-                "sources": []
+                "answer": "根据参考资料，二氧化碳是一种无色无味的气体，是地球温室效应的主要贡献者之一。在常温常压下，二氧化碳以气态存在，分子式为CO₂。工业上，它被广泛用于饮料碳酸化、灭火器和制冷（干冰）等领域。"
             }]
         elif example_type == 'summary':
             examples = [{
@@ -320,7 +315,7 @@ AI技术已渗透到众多行业，展现出巨大的商业价值。在**医疗�
                             $examples_section
 
                             请开始你的回答:""",
-                'variables': ['query', 'reference_text', 'conversation_history', 'output_schema', 'examples', 'knowledge_source'],
+                'variables': ['query', 'reference_text', 'conversation_history', 'output_schema', 'examples'],
                 'version': '5.2'
             },
             'quiz': {
@@ -344,8 +339,8 @@ AI技术已渗透到众多行业，展现出巨大的商业价值。在**医疗�
                             $examples_section
 
                             请严格按指定格式返回，不要有其他文字。请确保返回格式符合JSON Schema要求，可以被直接解析。""",
-                'variables': ['reference_text', 'topic', 'user_requirements', 'question_count', 'question_types', 'difficulty', 'output_schema', 'examples', 'knowledge_source'],
-                'version': '5.1'
+                'variables': ['reference_text', 'topic', 'user_requirements', 'question_count', 'question_types', 'difficulty', 'output_schema', 'examples'],
+                'version': '5.2'
             },
             'summary': {
                 'name': '标准文档总结',
