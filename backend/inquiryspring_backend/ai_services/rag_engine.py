@@ -449,122 +449,6 @@ class RAGEngine:
             logger.exception(f"检索-重排流程失败 (查询: '{query}'): {e}")
             return []
 
-    def retrieve_with_hybrid_sources(self, query: str) -> List[Dict[str, Any]]:
-        """
-        统一检索接口，同时从用户文档和通用知识库检索内容，并进行统一排序。
-        支持混合检索模式，返回统一的检索结果格式。
-        
-        Args:
-            query: 查询文本
-            
-        Returns:
-            统一格式的混合检索结果列表，每项包含内容、来源类型和元数据
-        """
-        start_time = time.time()
-        unified_results = []
-        
-        # 并行检索两种来源（如果可用）
-        doc_chunks = []
-        if self.document and self.retriever:
-            doc_chunks = self.retrieve_relevant_chunks(query)
-        
-        kb_results = []
-        if self.kb_retriever:
-            kb_results = self.retrieve_from_knowledge_base(query)
-        
-        # 统一结果格式
-        # 1. 添加文档结果
-        for chunk in doc_chunks:
-            unified_results.append({
-                'content': chunk.content,
-                'source_type': 'document',
-                'source_id': chunk.id,
-                'document_title': self.document.title if self.document else None,
-                'chunk_index': chunk.chunk_index,
-                'metadata': {'chunk_id': str(chunk.id), 'document_id': str(self.document.id)}
-            })
-        
-        # 2. 添加知识库结果
-        for result in kb_results:
-            metadata = result.get('metadata', {})
-            unified_results.append({
-                'content': result['content'],
-                'source_type': 'knowledge_base',
-                'source_id': result['id'],
-                'document_title': metadata.get('title', '通用知识'),
-                'chunk_index': metadata.get('chunk_index', 0),
-                'metadata': metadata
-            })
-        
-        # 如果没有任何结果，返回空列表
-        if not unified_results:
-            return []
-        
-        # 混合重排序
-        reranked_results = self._rerank_hybrid_results(unified_results, query)
-        
-        logger.info(f"混合检索完成，耗时: {time.time() - start_time:.2f}秒，文档结果数: {len(doc_chunks)}，知识库结果数: {len(kb_results)}，重排后结果数: {len(reranked_results)}")
-        
-        return reranked_results
-    
-    def _rerank_hybrid_results(self, results: List[Dict[str, Any]], query: str) -> List[Dict[str, Any]]:
-        """
-        对混合来源的结果进行统一重排序
-        
-        Args:
-            results: 混合检索结果
-            query: 原始查询
-            
-        Returns:
-            重排序后的结果列表
-        """
-        if not results:
-            return []
-            
-        # 如果没有重排模型，直接返回原始结果（按原顺序）
-        if not _GLOBAL_RERANKER:
-            logger.warning("重排模型不可用，混合结果将保持原始排序")
-            return results[:self.config.get('top_n_rerank', 5)]
-        
-        try:
-            # 提取文本内容，用于重排
-            texts = [r['content'] for r in results]
-            
-            # 生成查询与每个文本的相似度分数
-            pairs = [[query, text] for text in texts]
-            # Access the underlying sentence-transformer model via the `.client` attribute for direct prediction
-            scores = _GLOBAL_RERANKER.client.predict(pairs)
-            
-            # 为每个结果添加分数，并根据知识来源进行适度调整
-            for i, score in enumerate(scores):
-                final_score = score
-                # Handle cases where the reranker returns multiple scores (e.g., [dissimilarity, similarity])
-                # We assume the last score is the one indicating relevance.
-                if isinstance(score, (list, tuple)) or (hasattr(score, 'shape') and len(score.shape) > 0):
-                    logger.debug(f"Reranker returned multiple scores: {score}. Using the last one.")
-                    final_score = score[-1]
-
-                # 自定义规则: 根据来源类型进行细微调整
-                source_boost = 1.0
-                if results[i]['source_type'] == 'document' and self.document:
-                    # 当用户上传了文档时，给特定文档来源略微加分
-                    source_boost = 1.05  # 5%的提升
-                
-                # 存储调整后的分数
-                results[i]['relevance_score'] = final_score * source_boost
-            
-            # 重排序
-            reranked_results = sorted(results, key=lambda x: x.get('relevance_score', 0), reverse=True)
-            
-            # 截断到配置的长度
-            top_n = self.config.get('top_n_rerank', 5)
-            return reranked_results[:top_n]
-            
-        except Exception as e:
-            logger.exception(f"混合结果重排序失败: {str(e)}")
-            # 出错时返回原始列表，但仍然截断
-            return results[:self.config.get('top_n_rerank', 5)]
-
     # --- Private Helpers ---
     def _initialize_retrievers(self):
         """初始化一个带重排的混合检索管道."""
@@ -866,20 +750,16 @@ class RAGEngine:
             
         try:
             # 确定测验标题
-            if self.document:
-                quiz_title = f"{self.document.title} - {topic}"
-            else:
-                quiz_title = f"通用知识 - {topic}"
+            quiz_title = f"{self.document.title} - {topic}" if self.document else f"通用知识 - {topic}"
                 
-            # 创建测验记录，document可以为None表示通用知识库生成
+            # 创建测验记录
             quiz_obj = Quiz.objects.create(
                 document=self.document, 
                 title=quiz_title, 
                 difficulty_level=difficulty,
                 total_questions=len(quiz_data),
                 metadata={
-                    'is_general_knowledge': self.document is None,
-                    'knowledge_source': "通用知识库" if self.document is None else "文档"
+                    'knowledge_source': "文档" if self.document else "模型固有知识"
                 }
             )
             
@@ -896,40 +776,3 @@ class RAGEngine:
         except Exception as e:
             logger.error(f"保存测验数据到数据库失败: {e}")
             return None
-
-def initialize_ai_services():
-    """
-    [已弃用] 初始化所有AI服务相关组件 
-    
-    此函数已被移动到management/commands/init_ai_services.py中的Command类实现
-    请使用init_ai_services管理命令代替
-    """
-    logger.warning("调用已弃用的initialize_ai_services()函数。请使用'init_ai_services'管理命令代替。")
-    try:
-        # 初始化提示词模板
-        from .prompt_manager import PromptManager
-        logger.info("正在初始化提示词模板...")
-        PromptManager.create_default_templates()
-        
-        # 确保向量存储目录存在
-        os.makedirs(VECTOR_STORE_DIR, exist_ok=True)
-        
-        # 初始化默认的LLM客户端（验证连接）
-        from .llm_client import LLMClientFactory
-        logger.info("正在初始化LLM客户端...")
-        client = LLMClientFactory.create_client()
-        
-        # 检查本地模型路径是否有效
-        local_model_path = os.environ.get('LOCAL_MODEL_PATH')
-        if local_model_path and os.path.exists(local_model_path):
-            logger.info(f"检测到有效的本地模型路径: {local_model_path}")
-        
-        # 检查是否需要处理未处理的文档
-        from inquiryspring_backend.documents.models import Document
-        unprocessed_docs = Document.objects.filter(is_processed=False).count()
-        if unprocessed_docs > 0:
-            logger.info(f"发现 {unprocessed_docs} 个未处理的文档。可以使用process_documents管理命令进行处理。")
-        
-        logger.info("AI服务初始化完成。")
-    except Exception as e:
-        logger.exception(f"初始化AI服务时出错: {e}")
