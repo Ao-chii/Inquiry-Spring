@@ -155,23 +155,8 @@ class PromptManager:
         
         这是render_by_type的简化版本，专门用于结构化输出
         """
-        # 如果模板中没有预留的schema和examples部分，则使用StructuredOutputProcessor
-        template = PromptManager.get_template(template_type, name)
-        
-        if not template:
-            logger.error(f"无法找到类型为 '{template_type}' 的活跃模板，渲染失败。")
-            return f"错误：找不到类型为 '{template_type}' 的模板。"
-            
-        if '$json_schema_section' not in template.content or '$examples_section' not in template.content:
-            # 使用结构化输出处理器生成带有Schema和示例的提示
-            processor = StructuredOutputProcessor()
-            # 先渲染普通提示部分
-            base_prompt = PromptManager.render_template(template.content, variables)
-            # 然后添加schema和示例
-            return processor.generate_prompt_with_schema(base_prompt, output_schema, examples)
-        else:
-            # 模板中已有schema和examples占位符，使用标准渲染
-            return PromptManager.render_by_type(template_type, variables, name, output_schema, examples)
+        # 模板中已有schema和examples占位符，使用标准渲染
+        return PromptManager.render_by_type(template_type, variables, name, output_schema, examples)
     
     @staticmethod
     def _get_or_create_examples(example_type: str) -> List[Dict]:
