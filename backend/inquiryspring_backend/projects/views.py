@@ -32,15 +32,21 @@ def project_list(request):
             project_list = []
 
             for project in projects:
-                # 获取项目文档信息 - 适应前端期望格式
+                # 获取项目文档信息 - 先查ProjectDocument表，再查Document表
                 documents = []
-                for proj_doc in project.documents.all():
-                    doc = proj_doc.document
+                from ..documents.models import Document
+                project_docs = ProjectDocument.objects.filter(project=project)
+                for proj_doc in project_docs:
+                    try:
+                        doc = Document.objects.get(id=proj_doc.document_id)
+                    except Document.DoesNotExist:
+                        continue  # 跳过已失效的关联
                     if hasattr(doc, 'is_processed') and doc.is_processed:
                         documents.append({
+                            'id': doc.id,
                             'name': doc.title,
-                            'size': f"{doc.file_size // 1024}KB" if doc.file_size else "未知",
-                            'uploadTime': doc.uploaded_at.strftime('%Y-%m-%d %H:%M') if doc.uploaded_at else "未知"
+                            'size': f"{doc.file_size // 1024}KB" if getattr(doc, 'file_size', None) else "未知",
+                            'uploadTime': doc.uploaded_at.strftime('%Y-%m-%d %H:%M') if getattr(doc, 'uploaded_at', None) else "未知"
                         })
 
                 # 构建前端期望的项目数据格式

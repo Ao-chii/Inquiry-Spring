@@ -404,6 +404,7 @@ export default {
             loading: false, // 是否显示加载动画
             username: '',
             userInitial: '',
+            currentPrjId:null
         }
     },
     created() {
@@ -436,6 +437,7 @@ export default {
                         name: currentProject.name
                     });
                     projectId = currentProject.id;
+                    this.currentPrjId = currentProject.id;
                 }
             } catch (e) {
                 // ignore
@@ -461,6 +463,16 @@ export default {
             });
         }
 
+        let currentQuiz=localStorage.getItem('currentQuiz') ? JSON.parse(localStorage.getItem('currentQuiz')) : [];
+        if(currentQuiz!=[]&&currentQuiz.projectId==this.currentPrjId){
+            this.question=currentQuiz.questions;
+            this.$message.info('已恢复上次的测验内容')
+        }
+        //this.question = localStorage.getItem('currentQuiz') ? JSON.parse(localStorage.getItem('currentQuiz')) : [];
+        if (this.question && this.question.length > 0) {
+            this.items = this.question.length;
+            this.testVisible = true;
+        }
     },
     methods: {
         gotoChat() {
@@ -527,6 +539,8 @@ export default {
                             clearInterval(expandTimer);
                         }
                     }, 120); // 每120ms展开一个
+
+                    localStorage.setItem('currentQuiz', JSON.stringify({'questions':this.question,'projectId':this.currentPrjId || ''}));
                 })
                 .catch(error => {
                     console.error('测验生成失败:', error);

@@ -302,6 +302,7 @@ export default {
             selectedFileId: null, // 新增：当前选中的文件id（用于单选）
             username: '',
             userInitial: '',
+            currentPrjId: null, // 新增：当前项目的id
         }
     },
     created() {
@@ -334,6 +335,7 @@ export default {
                         name: currentProject.name
                     });
                     projectId = currentProject.id;
+                    this.currentPrjId=projectId;
                 }
             } catch (e) {
                 // ignore
@@ -358,6 +360,12 @@ export default {
                 this.$message.error('获取文档列表失败: ' + (err.response?.data?.error || err.message));
             });
         }
+
+        let currentSummary = localStorage.getItem('currentSummary')?JSON.parse(localStorage.getItem('currentSummary')):null;
+        if(currentSummary!=null&&currentSummary.projectId==this.currentPrjId){
+            this.summarizeMsg = currentSummary.summarizeMsg;
+            this.$message.info('已恢复上次的总结内容')
+        }  
     },
     mounted() {
         this.startLineAnimation(this.summarizeMsg)
@@ -477,7 +485,7 @@ export default {
                 this.displayLines.push(this.currentLine);
                 this.currentLine = '';
                 this.lineIdx++;
-                this.typingTimer = setTimeout(this.typeNextChar, 120);
+                this.typingTimer = setTimeout(this.typeNextChar, 1);
             }
         },
         generateSummary(){
@@ -492,12 +500,13 @@ export default {
                     this.summarizeMsg = response.data.AIMessage;
                     this.loading = false;
                     this.startLineAnimation(this.summarizeMsg);
+                    localStorage.setItem('currentSummary', JSON.stringify({'summarizeMsg':this.summarizeMsg || '','projectId':this.currentPrjId || ''}));
                 })
                 .catch(error => {
                     this.loading = false;
                     this.$message.error('获取AI回复失败:' + error.message);
                 });
-            }, 15000);
+            }, 5000);
         },
     }
 };

@@ -750,7 +750,7 @@ class RAGEngine:
             
         try:
             # 确定测验标题
-            quiz_title = f"{self.document.title} - {topic}" if self.document else f"通用知识 - {topic}"
+            quiz_title = f"{self.document.title} - {topic}" if self.document else f"{topic}"
                 
             # 创建测验记录
             quiz_obj = Quiz.objects.create(
