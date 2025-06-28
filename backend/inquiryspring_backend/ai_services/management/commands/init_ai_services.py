@@ -7,7 +7,7 @@ from django.core.management.base import BaseCommand
 from django.core.management import call_command
 from django.conf import settings
 from inquiryspring_backend.ai_services.models import AIModel, PromptTemplate
-from inquiryspring_backend.ai_services.rag_engine import initialize_ai_services, GENERAL_KNOWLEDGE_DIR
+from inquiryspring_backend.ai_services.rag_engine import GENERAL_KNOWLEDGE_DIR, VECTOR_STORE_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +27,7 @@ class Command(BaseCommand):
         self.stdout.write(self.style.SUCCESS("提示词模板初始化完成。"))
         
         # 3. 初始化RAG引擎及其他AI服务
-        # initialize_ai_services() # 这个函数主要初始化模板等，上面已做，rag引擎在调用时动态初始化
+        self.initialize_ai_services()
 
         # 4. 检查并构建通用知识库
         self.build_general_knowledge_base_if_needed()
@@ -154,3 +154,43 @@ class Command(BaseCommand):
         
         self.stdout.write(f"共创建 {created_count} 个AI模型配置，更新/确认 {updated_count} 个AI模型配置。") 
         self.stdout.write(self.style.SUCCESS("AI模型配置初始化完成。")) 
+
+    def initialize_ai_services(self):
+        """初始化所有AI服务相关组件"""
+        try:
+            # 初始化提示词模板
+            from inquiryspring_backend.ai_services.prompt_manager import PromptManager
+            logger.info("正在初始化提示词模板...")
+            PromptManager.create_default_templates()
+            
+            # 确保向量存储目录存在
+            os.makedirs(VECTOR_STORE_DIR, exist_ok=True)
+            
+            # 初始化默认的LLM客户端（验证连接）
+            from inquiryspring_backend.ai_services.llm_client import LLMClientFactory
+            logger.info("正在初始化LLM客户端...")
+            client = LLMClientFactory.create_client()
+            
+            # 初始化Neo4j知识图谱
+            from inquiryspring_backend.ai_services.neo4j_manager import initialize_neo4j
+            logger.info("正在初始化Neo4j知识图谱...")
+            neo4j_success = initialize_neo4j()
+            if neo4j_success:
+                logger.info("Neo4j知识图谱初始化成功")
+            else:
+                logger.warning("Neo4j知识图谱初始化失败，图谱检索功能将不可用")
+            
+            # 检查本地模型路径是否有效
+            local_model_path = os.environ.get('LOCAL_MODEL_PATH')
+            if local_model_path and os.path.exists(local_model_path):
+                logger.info(f"检测到有效的本地模型路径: {local_model_path}")
+            
+            # 检查是否需要处理未处理的文档
+            from inquiryspring_backend.documents.models import Document
+            unprocessed_docs = Document.objects.filter(is_processed=False).count()
+            if unprocessed_docs > 0:
+                logger.info(f"发现 {unprocessed_docs} 个未处理的文档。可以使用process_documents管理命令进行处理。")
+            
+            logger.info("AI服务初始化完成。")
+        except Exception as e:
+            logger.exception(f"初始化AI服务时出错: {e}") 

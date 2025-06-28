@@ -29,6 +29,14 @@ from inquiryspring_backend.quiz.models import Quiz, Question
 from django.conf import settings
 from .structured_output import StructuredOutputProcessor, ChatResponse, Quiz as QuizModel, SummaryResponse
 
+# Graph-related imports for Knowledge Graph Retriever
+import networkx as nx
+from langchain.graphs import NetworkxEntityGraph
+
+# Import Neo4j knowledge graph manager
+from .neo4j_manager import _GLOBAL_NEO4J, initialize_neo4j
+from .graph_retriever import KnowledgeGraphRetriever # Import the new retriever
+
 logger = logging.getLogger(__name__)
 
 # 用户知识库存储目录
@@ -79,7 +87,7 @@ class RAGEngine:
     DEFAULT_CONFIG = {
         'chunk_size': 1000, 'chunk_overlap': 100, 'initial_retrieval_k': 20, # 初始检索阶段（BM25+向量），每个检索器召回的数量
         'top_n_rerank': 5,         # 重排后，最终选择的文档数量
-        'ensemble_weights': [0.5, 0.5], # 混合检索权重 [BM25, Vector]
+        'ensemble_weights': [0.3, 0.4, 0.3], # 混合检索权重 [BM25, Vector, Graph]
         'vector_store_dir': VECTOR_STORE_DIR, 'default_question_count': 5,
         'default_question_types': ['MC', 'TF'], 'default_difficulty': 'medium',
         'structured_output': True,  # 是否使用结构化输出处理
@@ -89,6 +97,7 @@ class RAGEngine:
     def __init__(self, document_id: int = None, llm_client = None, config: Dict = None):
         self.document = None
         self.retriever = None  # 将使用带重排的混合检索器
+        self.graph = None      # 不再使用内存中的图谱，而是Neo4j
         self.config = {**self.DEFAULT_CONFIG, **(config or {})}
         
         if document_id:
@@ -381,9 +390,35 @@ class RAGEngine:
             
             persist_dir = os.path.join(self.config['vector_store_dir'], str(self.document.id))
             document_chunks = list(self.document.chunks.all())
-            metadatas = [{'chunk_id': str(c.id)} for c in document_chunks]
-            vector_store = Chroma.from_texts([c.content for c in document_chunks], self.embeddings, metadatas=metadatas, persist_directory=persist_dir)
+            langchain_docs = [LangchainDocument(page_content=c.content, metadata={'chunk_id': str(c.id)}) for c in document_chunks]
+            
+            # 创建向量存储
+            vector_store = Chroma.from_texts([c.content for c in document_chunks], self.embeddings, metadatas=[d.metadata for d in langchain_docs], persist_directory=persist_dir)
             vector_store.persist()
+
+            # ---- 新增：使用Neo4j构建知识图谱 ----
+            try:
+                logger.info("开始构建Neo4j知识图谱...")
+                if _GLOBAL_NEO4J and _GLOBAL_NEO4J.is_connected():
+                    # 确保LLM模型能够与LangChain兼容
+                    llm = self.llm_client.llm if hasattr(self.llm_client, 'llm') else self.llm_client
+                    
+                    # 使用Neo4j处理文档实体和关系
+                    success = _GLOBAL_NEO4J.process_entities_from_llm(
+                        langchain_docs=langchain_docs,
+                        llm=llm,
+                        document_id=str(self.document.id)
+                    )
+                    
+                    if success:
+                        logger.info(f"Neo4j知识图谱构建成功，文档ID: {self.document.id}")
+                    else:
+                        logger.warning(f"Neo4j知识图谱构建失败，文档ID: {self.document.id}")
+                else:
+                    logger.warning("Neo4j数据库未连接，跳过知识图谱构建")
+            except Exception as e:
+                logger.exception(f"构建Neo4j知识图谱失败: {e}")
+            # ---- 结束新增 ----
 
             self.document.is_processed = True
             self.document.save()
@@ -568,18 +603,57 @@ class RAGEngine:
             vector_store = Chroma(persist_directory=persist_dir, embedding_function=self.embeddings)
             vector_retriever = vector_store.as_retriever(search_kwargs={"k": k})
         else:
-            logger.warning(f"未找到文档 {self.document.id} 的向量存储。混合检索将只依赖BM25。")
+            logger.warning(f"未找到文档 {self.document.id} 的向量存储。向量检索将不可用。")
 
-        # 3. 组合成基础的混合检索器
+        # 3. 初始化所有可用的基础检索器
+        all_retrievers = []
+        if bm25_retriever:
+            all_retrievers.append(bm25_retriever)
         if vector_retriever:
-            base_retriever = EnsembleRetriever(
-                retrievers=[bm25_retriever, vector_retriever],
-                weights=self.config['ensemble_weights']
-            )
-        else: # 回退到只有BM25
-            base_retriever = bm25_retriever
+            all_retrievers.append(vector_retriever)
         
-        # 4. 如果重排模型加载成功，则创建带重排的压缩检索器
+        # 添加知识图谱检索器（如果Neo4j连接可用）
+        # 如果Neo4j还未初始化，尝试初始化一次
+        if _GLOBAL_NEO4J is None:
+            logger.info("Neo4j尚未初始化，尝试即时初始化...")
+            initialize_neo4j()
+            
+        if _GLOBAL_NEO4J and _GLOBAL_NEO4J.is_connected():
+            try:
+                # 注意这里不再传入 graph 参数，而是传入 document_id
+                graph_retriever = KnowledgeGraphRetriever(
+                    document_id=str(self.document.id),
+                    k=k,
+                    llm_client=self.llm_client # 传递LLM客户端实例
+                )
+                all_retrievers.append(graph_retriever)
+                logger.info(f"Neo4j知识图谱检索器已为文档 {self.document.id} 初始化。")
+            except Exception as e:
+                logger.error(f"初始化Neo4j知识图谱检索器失败: {e}")
+
+        # 4. 组合成基础的混合检索器（如果多于一个检索器）
+        if not all_retrievers:
+            logger.error(f"文档 {self.document.id} 没有任何可用的检索器。")
+            return
+            
+        if len(all_retrievers) > 1:
+            # 动态调整权重
+            num_retrievers = len(all_retrievers)
+            configured_weights = self.config.get('ensemble_weights', [])
+            weights = configured_weights[:num_retrievers]
+            # 如果权重数量不匹配，则使用平均权重
+            if len(weights) != num_retrievers:
+                weights = [1/num_retrievers] * num_retrievers
+                logger.warning(f"配置的检索器权重与可用检索器数量不匹配，将使用平均权重: {weights}")
+
+            base_retriever = EnsembleRetriever(
+                retrievers=all_retrievers,
+                weights=weights
+            )
+        else:
+            base_retriever = all_retrievers[0]
+        
+        # 5. 如果重排模型加载成功，则创建带重排的压缩检索器
         if _GLOBAL_RERANKER:
             compressor = CrossEncoderReranker(model=_GLOBAL_RERANKER, top_n=self.config.get('top_n_rerank', 5))
             self.retriever = ContextualCompressionRetriever(
@@ -898,7 +972,13 @@ class RAGEngine:
             return None
 
 def initialize_ai_services():
-    """初始化所有AI服务相关组件"""
+    """
+    [已弃用] 初始化所有AI服务相关组件 
+    
+    此函数已被移动到management/commands/init_ai_services.py中的Command类实现
+    请使用init_ai_services管理命令代替
+    """
+    logger.warning("调用已弃用的initialize_ai_services()函数。请使用'init_ai_services'管理命令代替。")
     try:
         # 初始化提示词模板
         from .prompt_manager import PromptManager
