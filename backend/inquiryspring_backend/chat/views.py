@@ -349,6 +349,9 @@ class ChatDocumentUploadView(View):
             final_path = os.path.join(final_dir, filename)
 
             # 移动文件到最终位置
+            # 如果目标文件已存在，先删除它
+            if os.path.exists(final_path):
+                os.remove(final_path)
             os.rename(file_path, final_path)
 
             # 更新document记录
