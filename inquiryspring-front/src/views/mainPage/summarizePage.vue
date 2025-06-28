@@ -115,9 +115,9 @@
                         <div style="height: 100%; padding: 20px; background: white; border-radius: 12px; box-shadow: 0 2px 12px rgba(0,0,0,0.05); display: flex; flex-direction: column;">
                             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
                                 <h3 style="color: #5a4a3a;">总结内容</h3>
-                                <!-- <v-btn @click="output" color="#8b7355" style="color: white;">
+                                <v-btn @click="output" color="#8b7355" style="color: white;">
                                     导出
-                                </v-btn> -->
+                                </v-btn>
                             </div>
                             <div class="markdown-container" style="flex: 1; overflow-y: auto;">
                                 <div v-if="loading" style="display: flex; align-items: center; justify-content: center; height: 100%;">
@@ -302,6 +302,7 @@ export default {
             selectedFileId: null, // 新增：当前选中的文件id（用于单选）
             username: '',
             userInitial: '',
+            currentPrjId: null, // 新增：当前项目的id
         }
     },
     created() {
@@ -334,6 +335,7 @@ export default {
                         name: currentProject.name
                     });
                     projectId = currentProject.id;
+                    this.currentPrjId=projectId;
                 }
             } catch (e) {
                 // ignore
@@ -358,6 +360,12 @@ export default {
                 this.$message.error('获取文档列表失败: ' + (err.response?.data?.error || err.message));
             });
         }
+
+        let currentSummary = localStorage.getItem('currentSummary')?JSON.parse(localStorage.getItem('currentSummary')):null;
+        if(currentSummary!=null&&currentSummary.projectId==this.currentPrjId){
+            this.summarizeMsg = currentSummary.summarizeMsg;
+            this.$message.info('已恢复上次的总结内容')
+        }  
     },
     mounted() {
         this.startLineAnimation(this.summarizeMsg)
@@ -399,7 +407,26 @@ export default {
             this.$router.push({ path: '/test' });
         },
         output(){
-            window.alert(this.summarizeMsg);
+            // 1. 检查内容是否为空
+            if (!this.summarizeMsg || this.summarizeMsg.trim() === '') {
+                this.$message.warning('暂无可导出的内容');
+                return;
+            }
+            // 2. 获取要导出的内容（markdown格式）
+            const content = this.summarizeMsg;
+            // 3. 创建Blob对象，类型为markdown
+            const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' });
+            // 4. 创建下载链接
+            const url = window.URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = '用户'+this.username+'_文档总结.md'; // 导出为markdown文件
+            // 5. 触发下载
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            // 6. 释放URL对象
+            window.URL.revokeObjectURL(url);
         },
         gotoPrj(){
             this.$router.push({ path: '/project' });
@@ -458,7 +485,7 @@ export default {
                 this.displayLines.push(this.currentLine);
                 this.currentLine = '';
                 this.lineIdx++;
-                this.typingTimer = setTimeout(this.typeNextChar, 120);
+                this.typingTimer = setTimeout(this.typeNextChar, 1);
             }
         },
         generateSummary(){
@@ -473,12 +500,13 @@ export default {
                     this.summarizeMsg = response.data.AIMessage;
                     this.loading = false;
                     this.startLineAnimation(this.summarizeMsg);
+                    localStorage.setItem('currentSummary', JSON.stringify({'summarizeMsg':this.summarizeMsg || '','projectId':this.currentPrjId || ''}));
                 })
                 .catch(error => {
                     this.loading = false;
                     this.$message.error('获取AI回复失败:' + error.message);
                 });
-            }, 15000);
+            }, 5000);
         },
     }
 };

@@ -294,7 +294,6 @@ class RAGEngine:
         prompt_vars = {**params}
         if retrieved_results:
             prompt_vars['reference_text'] = "\n\n".join([r['content'] for r in retrieved_results])
-            prompt_vars['knowledge_source'] = "文档"
         else:
             logger.warning(f"在任何来源中都未找到与'{params['topic']}'相关的内容，将使用模型的固有知识")
             prompt_vars['reference_text'] = ""
@@ -325,7 +324,6 @@ class RAGEngine:
                     'quiz_id': quiz_id,
                     'quiz_data': quiz_data,
                     'processing_time': time.time() - start_time,
-                    'knowledge_source': prompt_vars.get('knowledge_source', '模型固有知识'),
                     'error': None
                 }
             except ValueError as e:
@@ -335,7 +333,6 @@ class RAGEngine:
                     'quiz_id': None,
                     'quiz_data': [],
                     'processing_time': time.time() - start_time,
-                    'knowledge_source': prompt_vars.get('knowledge_source', '模型固有知识'),
                     'error': f"无法生成结构化的测验，请稍后重试。错误: {str(e)}",
                     'raw_output': llm_response.get('text', '') # 包含原始输出，便于调试
                 }
@@ -348,7 +345,6 @@ class RAGEngine:
                 'quiz_id': quiz_id,
                 'quiz_data': quiz_data,
                 'processing_time': time.time() - start_time,
-                'knowledge_source': prompt_vars.get('knowledge_source', '模型固有知识'),
                 'error': llm_response.get('error')
             }
         except Exception as e:
@@ -817,9 +813,7 @@ class RAGEngine:
                 title=quiz_title, 
                 difficulty_level=difficulty,
                 total_questions=len(quiz_data),
-                metadata={
-                    'knowledge_source': "文档" if self.document else "模型固有知识"
-                }
+                metadata={}
             )
             
             # 使用bulk_create提高效率
