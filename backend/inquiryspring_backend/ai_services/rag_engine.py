@@ -41,10 +41,7 @@ logger = logging.getLogger(__name__)
 
 # 用户知识库存储目录
 VECTOR_STORE_DIR = os.path.join(settings.BASE_DIR, "vector_store")
-# 通用知识库存储目录
-GENERAL_KNOWLEDGE_DIR = os.path.join(settings.BASE_DIR, "general_knowledge")
 os.makedirs(VECTOR_STORE_DIR, exist_ok=True)
-os.makedirs(GENERAL_KNOWLEDGE_DIR, exist_ok=True)
 
 
 # ---- 全局嵌入模型单例 ----
@@ -117,10 +114,6 @@ class RAGEngine:
         else:
             self.output_processor = None
         
-        # 初始化通用知识库检索器
-        self.kb_retriever = None
-        self.init_general_knowledge_base()
-        
         if self.document and self.document.is_processed:
             self._initialize_retrievers()
 
@@ -148,7 +141,18 @@ class RAGEngine:
         }
         
         # 使用混合检索获取上下文
-        retrieved_results = self.retrieve_with_hybrid_sources(rewritten_query)
+        doc_chunks = self.retrieve_relevant_chunks(rewritten_query) if self.document else []
+        retrieved_results = []
+        if doc_chunks:
+            retrieved_results = [{
+                'content': chunk.content,
+                'source_type': 'document',
+                'source_id': chunk.id,
+                'document_title': self.document.title if self.document else None,
+                'chunk_index': chunk.chunk_index,
+                'metadata': {'chunk_id': str(chunk.id), 'document_id': str(self.document.id)}
+            } for chunk in doc_chunks]
+        
         has_context = bool(retrieved_results)
 
         if has_context:
@@ -251,19 +255,23 @@ class RAGEngine:
         log_context = {'user': user, 'session_id': session_id, 'document': self.document}
         
         # 使用混合检索获取上下文
-        retrieved_results = self.retrieve_with_hybrid_sources(params['topic'])
+        doc_chunks = self.retrieve_relevant_chunks(params['topic']) if self.document else []
+        retrieved_results = []
+        if doc_chunks:
+            retrieved_results = [{
+                'content': chunk.content,
+                'source_type': 'document',
+                'source_id': chunk.id,
+                'document_title': self.document.title,
+                'chunk_index': chunk.chunk_index,
+                'metadata': {'chunk_id': str(chunk.id), 'document_id': str(self.document.id)}
+            } for chunk in doc_chunks]
         
         # 准备提示词变量
         prompt_vars = {**params}
         if retrieved_results:
             prompt_vars['reference_text'] = "\n\n".join([r['content'] for r in retrieved_results])
-            source_types = {r['source_type'] for r in retrieved_results}
-            if 'document' in source_types and 'knowledge_base' in source_types:
-                prompt_vars['knowledge_source'] = "文档和通用知识库"
-            elif 'document' in source_types:
-                prompt_vars['knowledge_source'] = "文档"
-            else:
-                prompt_vars['knowledge_source'] = "通用知识库"
+            prompt_vars['knowledge_source'] = "文档"
         else:
             logger.warning(f"在任何来源中都未找到与'{params['topic']}'相关的内容，将使用模型的固有知识")
             prompt_vars['reference_text'] = ""
@@ -864,74 +872,6 @@ class RAGEngine:
             logger.exception(f"生成对话摘要失败: {e}")
             # 出错时返回简单描述
             return f"早先的对话包含了{len(conversation_turns)}轮交流。"
-
-    def init_general_knowledge_base(self):
-        """初始化通用知识库检索器"""
-        if os.path.exists(GENERAL_KNOWLEDGE_DIR):
-            try:
-                # 检查知识库是否已经存在
-                if os.listdir(GENERAL_KNOWLEDGE_DIR):
-                    # 加载通用知识库的向量存储
-                    kb_vector_store = Chroma(
-                        persist_directory=GENERAL_KNOWLEDGE_DIR,
-                        embedding_function=self.embeddings
-                    )
-                    
-                    # 使用向量存储创建检索器，配置相同的重排参数
-                    self.kb_retriever = kb_vector_store.as_retriever(
-                        search_kwargs={"k": self.config.get('top_n_rerank', 5)}
-                    )
-                    
-                    # 如果有重排模型，应用与文档检索相同的重排策略
-                    if _GLOBAL_RERANKER:
-                        compressor = CrossEncoderReranker(
-                            model=_GLOBAL_RERANKER, 
-                            top_n=self.config.get('top_n_rerank', 5)
-                        )
-                        self.kb_retriever = ContextualCompressionRetriever(
-                            base_compressor=compressor,
-                            base_retriever=self.kb_retriever
-                        )
-                    
-                    logger.info("通用知识库检索器已初始化")
-                else:
-                    logger.warning("通用知识库目录存在但为空，暂不可用")
-            except Exception as e:
-                logger.error(f"初始化通用知识库失败: {str(e)}")
-                self.kb_retriever = None
-        else:
-            logger.info("通用知识库不存在，跳过初始化")
-            self.kb_retriever = None
-
-    def retrieve_from_knowledge_base(self, query: str) -> List[Dict[str, Any]]:
-        """从通用知识库检索相关内容
-        
-        Args:
-            query: 查询文本
-            
-        Returns:
-            知识库检索结果列表，每项包含内容和元数据
-        """
-        if not self.kb_retriever:
-            logger.warning("通用知识库检索器未初始化，无法执行检索")
-            return []
-            
-        try:
-            results = self.kb_retriever.get_relevant_documents(query)
-            
-            # 将LangChain文档对象转换为带有源信息的字典
-            processed_results = []
-            for idx, doc in enumerate(results):
-                processed_results.append({
-                    'content': doc.page_content,
-                    'metadata': doc.metadata,
-                    'id': idx + 1  # 为了与文档块ID保持一致的引用方式
-                })
-                
-            return processed_results
-        except Exception as e:
-            logger.exception(f"从通用知识库检索失败: {str(e)}")
-            return []
 
     def _save_quiz_to_db(self, quiz_data: List[Dict], topic: str, difficulty: str) -> Optional[int]:
         """将通过验证的测验数据保存到数据库。"""
