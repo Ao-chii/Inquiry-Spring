@@ -49,7 +49,7 @@
     <el-container>
         <el-main style="padding: 20px; display: flex; flex-direction: column; height: 100%; background-color: rgba(255,255,255,0.7); border-radius: 16px; margin: 20px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); border: 1px solid rgba(139, 115, 85, 0.1)">
             <!-- <div class="content-container" style="flex: 1; display: flex; flex-direction: column; gap: 30px;"> -->
-                <el-col style="width: 100%; padding: 30px; background: rgba(255,255,255,0.9); border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); display: flex; gap: 48px; align-items: flex-start;">
+                <el-col style="width: 100%; padding: 30px; background: rgba(255,255,255,0.9); border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); display: flex; gap: 48px; align-items: flex-start; margin-bottom: 15px;">
                     <div style="flex: 1; padding: 10px;">
                         <h3 style="margin-bottom: 15px; display: flex; align-items: center; gap: 5px;">
                             选择文件
@@ -276,6 +276,9 @@
                             </v-btn>
                             <v-btn @click="getAnalysis" color="#8b7355" style="color: white;">
                                 查看解析
+                            </v-btn>
+                            <v-btn @click="output" color="#8b7355" style="color: white;">
+                                导出
                             </v-btn>
                         </div>
                     </div>
@@ -683,6 +686,65 @@ export default {
             this.selectedFileRow = row;
             this.selectedFileName = row.name;
         },
+
+        output(){
+            // 1. 检查是否有题目
+            if (!this.question || !this.question.length) {
+                this.$message.warning('暂无可导出的题目内容');
+                return;
+            }
+            // 2. 构建markdown内容
+            let md = `# 小测题目与答案\n\n`;
+            this.question.forEach((q, idx) => {
+                md += `## 题目${idx + 1}：${q.type || ''}\n`;
+                md += q.question ? q.question + '\n' : '';
+                if (q.options && Array.isArray(q.options) && q.options.length > 0) {
+                    q.options.forEach((opt, i) => {
+                        // 选项格式化
+                        let optText = '';
+                        if (typeof opt === 'object') {
+                            optText = (opt.id ? opt.id + '. ' : String.fromCharCode(65 + i) + '. ') + (opt.text || '');
+                        } else if (typeof opt === 'string') {
+                            optText = opt;
+                        }
+                        md += `- ${optText}\n`;
+                    });
+                }
+                // 答案
+                md += `\n**我的答案：** `;
+                const ans = this.answer[idx];
+                if (Array.isArray(ans)) {
+                    md += ans.join(', ');
+                } else {
+                    md += ans || '（未作答）';
+                }
+                if (q.answer !== undefined) {
+                    md += `\n**标准答案：** `;
+                    if (Array.isArray(q.answer)) {
+                        md += q.answer.join(', ');
+                    } else {
+                        md += q.answer;
+                    }
+                }
+                if (q.explanation || q.analysis) {
+                    md += `\n**解析：** ${(q.explanation || q.analysis)}`;
+                }
+                md += '\n\n---\n\n';
+            });
+            // 3. 创建Blob对象，类型为markdown
+            const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
+            // 4. 创建下载链接
+            const url = window.URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = '用户'+this.username+'_小测题目与答案.md';
+            // 5. 触发下载
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            // 6. 释放URL对象
+            window.URL.revokeObjectURL(url);
+        }
     }
 };
 </script>
