@@ -157,17 +157,6 @@ class RAGEngine:
 
         if has_context:
             prompt_vars['reference_text'] = "\n\n---\n\n".join([r['content'] for r in retrieved_results])
-            
-            # 为LLM的溯源功能准备source信息
-            sources_for_prompt = []
-            for i, r in enumerate(retrieved_results):
-                source_info = {
-                    'id': i + 1,
-                    'type': r['source_type'],
-                    'title': r['document_title']
-                }
-                sources_for_prompt.append(source_info)
-            prompt_vars['sources_info'] = sources_for_prompt # 添加到prompt变量中
 
         # 获取聊天示例
         chat_examples = PromptManager._get_or_create_examples('chat')
@@ -198,7 +187,6 @@ class RAGEngine:
                 # 返回验证后的结构化结果
                 result = {
                     'answer': validated_response.answer,
-                    'sources': validated_response.sources if validated_response.sources else [],
                     'processing_time': time.time() - start_time,
                     'is_generic_answer': not has_context,
                     'error': llm_response.get('error')
@@ -207,7 +195,6 @@ class RAGEngine:
                 logger.warning(f"结构化输出验证失败: {str(e)}，回退到非结构化输出")
                 result = {
                     'answer': llm_response.get('text', '无法生成回答'),
-                    'sources': retrieved_results, # 回退时返回原始检索结果
                     'processing_time': time.time() - start_time,
                     'is_generic_answer': not has_context,
                     'error': llm_response.get('error') or str(e)
@@ -216,7 +203,6 @@ class RAGEngine:
             # 原始非结构化输出处理
             result = {
                 'answer': llm_response.get('text', '无法生成回答'),
-                'sources': retrieved_results, # 返回原始检索结果
                 'processing_time': time.time() - start_time,
                 'is_generic_answer': not has_context,
                 'error': llm_response.get('error')
