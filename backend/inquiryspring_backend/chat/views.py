@@ -416,12 +416,23 @@ def clear_conversations(request):
         data = request.data
         username = data.get('username', '')
 
-        deleted_count = Conversation.objects.filter(username=username).count()
+        # 统计要删除的记录数
+        conversation_count = Conversation.objects.filter(username=username).count()
+        chat_session_count = ChatSession.objects.all().count()  # ChatSession没有用户关联，清空所有
+
+        # 删除新版本的对话记录
         Conversation.objects.filter(username=username).delete()
+
+        # 删除旧版本的聊天会话记录（为了彻底清空）
+        ChatSession.objects.all().delete()
+
+        total_deleted = conversation_count + chat_session_count
 
         return Response({
             'message': '对话历史清空成功',
-            'deleted_count': deleted_count
+            'deleted_count': total_deleted,
+            'conversation_deleted': conversation_count,
+            'chat_session_deleted': chat_session_count
         })
 
     except Exception as e:

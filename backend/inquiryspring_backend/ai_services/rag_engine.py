@@ -117,9 +117,39 @@ class RAGEngine:
         if self.document and self.document.is_processed:
             self._initialize_retrievers()
 
+    # --- Utility Methods ---
+
+    def _clean_index_markers(self, text: str) -> str:
+        """
+        清理文本中的索引标记和引用标记
+        """
+        if not text:
+            return text
+
+        # 定义需要清理的索引标记模式
+        patterns = [
+            r'\[\d+\]',           # [1], [2], [3] 等
+            r'\[\d+,\s*\d+\]',    # [1,2], [1, 2] 等
+            r'\[\d+,\s*\d+,\s*\d+\]',  # [1,2,3], [1, 2, 3] 等
+            r'\(\d+\)',           # (1), (2), (3) 等
+            r'①②③④⑤⑥⑦⑧⑨⑩',      # 圆圈数字
+            r'【\d+】',           # 【1】, 【2】 等
+            r'〔\d+〕',           # 〔1〕, 〔2〕 等
+        ]
+
+        cleaned_text = text
+        for pattern in patterns:
+            cleaned_text = re.sub(pattern, '', cleaned_text)
+
+        # 清理多余的空格和换行
+        cleaned_text = re.sub(r'\s+', ' ', cleaned_text)
+        cleaned_text = cleaned_text.strip()
+
+        return cleaned_text
+
     # --- Public API ---
 
-    def handle_chat(self, query: str, document_id: int = None, 
+    def handle_chat(self, query: str, document_id: int = None,
                     conversation_history: List[Dict[str, Any]] = None, 
                     user: Any = None, session_id: str = None) -> Dict[str, Any]:
         """统一处理聊天请求。"""
@@ -152,11 +182,12 @@ class RAGEngine:
                 'chunk_index': chunk.chunk_index,
                 'metadata': {'chunk_id': str(chunk.id), 'document_id': str(self.document.id)}
             } for chunk in doc_chunks]
-        
+
         has_context = bool(retrieved_results)
 
         if has_context:
             prompt_vars['reference_text'] = "\n\n---\n\n".join([r['content'] for r in retrieved_results])
+            prompt_vars['knowledge_source'] = "文档"
 
         # 获取聊天示例
         chat_examples = PromptManager._get_or_create_examples('chat')
@@ -185,24 +216,30 @@ class RAGEngine:
                 )
                 
                 # 返回验证后的结构化结果
+                cleaned_answer = self._clean_index_markers(validated_response.answer)
                 result = {
-                    'answer': validated_response.answer,
+                    'answer': cleaned_answer,
+                    'sources': retrieved_results,
                     'processing_time': time.time() - start_time,
                     'is_generic_answer': not has_context,
                     'error': llm_response.get('error')
                 }
             except ValueError as e:
                 logger.warning(f"结构化输出验证失败: {str(e)}，回退到非结构化输出")
+                cleaned_answer = self._clean_index_markers(llm_response.get('text', '无法生成回答'))
                 result = {
-                    'answer': llm_response.get('text', '无法生成回答'),
+                    'answer': cleaned_answer,
+                    'sources': retrieved_results,
                     'processing_time': time.time() - start_time,
                     'is_generic_answer': not has_context,
                     'error': llm_response.get('error') or str(e)
                 }
         else:
             # 原始非结构化输出处理
+            cleaned_answer = self._clean_index_markers(llm_response.get('text', '无法生成回答'))
             result = {
-                'answer': llm_response.get('text', '无法生成回答'),
+                'answer': cleaned_answer,
+                'sources': retrieved_results,
                 'processing_time': time.time() - start_time,
                 'is_generic_answer': not has_context,
                 'error': llm_response.get('error')
@@ -347,19 +384,41 @@ class RAGEngine:
         if self.output_processor and self.config.get('structured_output', True):
             try:
                 validated_response = self.output_processor.validate_and_fix(
-                    response.get('text', ''), 
-                    SummaryResponse, 
+                    response.get('text', ''),
+                    SummaryResponse,
                     self.llm_client,
                     task_type="summary_fix",
                     **log_context
                 )
-                
-                # 更新响应结果
-                response['text'] = validated_response.summary
+
+                # 更新响应结果并清理索引标记
+                cleaned_summary = self._clean_index_markers(validated_response.summary)
+                response['text'] = cleaned_summary
+                logger.info("总结结构化输出验证成功")
             except ValueError as e:
-                logger.warning(f"摘要结构化输出验证失败: {str(e)}，保留原始输出")
-                # 原始输出保持不变
-        
+                logger.warning(f"摘要结构化输出验证失败: {str(e)}，使用原始输出")
+                # 对原始输出进行清理
+                original_text = response.get('text', '')
+                if original_text:
+                    cleaned_text = self._clean_index_markers(original_text)
+                    response['text'] = cleaned_text
+                    logger.info(f"已清理原始输出，长度: {len(cleaned_text)}")
+                else:
+                    response['text'] = "抱歉，无法生成摘要。"
+                    logger.error("原始输出为空")
+        else:
+            # 如果不使用结构化输出，直接清理原始文本
+            original_text = response.get('text', '')
+            if original_text:
+                cleaned_text = self._clean_index_markers(original_text)
+                response['text'] = cleaned_text
+            else:
+                response['text'] = "抱歉，无法生成摘要。"
+
+        # 最终确保输出不为空且经过清理
+        if not response.get('text'):
+            response['text'] = "抱歉，无法生成摘要。"
+
         response['document_id'] = self.document.id
         return response
 
@@ -433,7 +492,7 @@ class RAGEngine:
                 return []
         
         try:
-            results = self.retriever.get_relevant_documents(query)
+            results = self.retriever.invoke(query)
             
             # 使用有序的chunk_id列表从数据库中一次性获取，并保持顺序
             chunk_ids = [doc.metadata.get('chunk_id') for doc in results if doc.metadata.get('chunk_id')]
@@ -750,7 +809,7 @@ class RAGEngine:
             
         try:
             # 确定测验标题
-            quiz_title = f"{self.document.title} - {topic}" if self.document else f"通用知识 - {topic}"
+            quiz_title = f"{self.document.title} - {topic}" if self.document else f"{topic}"
                 
             # 创建测验记录
             quiz_obj = Quiz.objects.create(

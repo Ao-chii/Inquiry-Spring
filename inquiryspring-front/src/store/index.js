@@ -3,11 +3,15 @@ import Vuex from 'vuex'
 
 Vue.use(Vuex)
 
+// 从localStorage恢复聊天历史
+const savedChatHistory = localStorage.getItem('chatHistory');
+const initialChatHistory = savedChatHistory ? JSON.parse(savedChatHistory) : [];
+
 export default new Vuex.Store({
   state: {
     selectedPrjId:0,
     selectedPrjName:'',
-    chatHistory: [], // 全局对话历史
+    chatHistory: initialChatHistory, // 从localStorage恢复的对话历史
     user: {
       username: '',
       isLoggedIn: false
@@ -30,12 +34,18 @@ export default new Vuex.Store({
     },
     setChatHistory(state, history) {
       state.chatHistory = history;
+      // 同步到localStorage
+      localStorage.setItem('chatHistory', JSON.stringify(history));
     },
     addChatMessage(state, message) {
       state.chatHistory.push(message);
+      // 同步到localStorage
+      localStorage.setItem('chatHistory', JSON.stringify(state.chatHistory));
     },
     clearChatHistory(state) {
       state.chatHistory = [];
+      // 同时清空localStorage中的聊天历史
+      localStorage.removeItem('chatHistory');
     },
     setUserInfo(state, userInfo) {
       state.user.username = userInfo.username;
@@ -65,6 +75,10 @@ export default new Vuex.Store({
     },
     clearChatHistory({commit}) {
       commit('clearChatHistory');
+      // 清空所有相关的localStorage数据
+      localStorage.removeItem('currentConversation');
+      localStorage.removeItem('currentSession');
+      localStorage.removeItem('lastChatMessage');
     },
     updateUserInfo({commit}, userInfo) {
       commit('setUserInfo', userInfo);

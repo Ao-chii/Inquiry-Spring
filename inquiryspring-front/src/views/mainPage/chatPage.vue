@@ -319,6 +319,159 @@
         line-height: 1.6;
         font-size: 15px;
     }
+
+    /* Markdown样式 */
+    .message-content h1 {
+        font-size: 1.8em;
+        font-weight: bold;
+        margin: 16px 0 12px 0;
+        color: #5a4a3a;
+        border-bottom: 2px solid #8b7355;
+        padding-bottom: 8px;
+    }
+
+    .message-content h2 {
+        font-size: 1.5em;
+        font-weight: bold;
+        margin: 14px 0 10px 0;
+        color: #5a4a3a;
+        border-bottom: 1px solid #d4c9a8;
+        padding-bottom: 6px;
+    }
+
+    .message-content h3 {
+        font-size: 1.3em;
+        font-weight: bold;
+        margin: 12px 0 8px 0;
+        color: #5a4a3a;
+    }
+
+    .message-content h4 {
+        font-size: 1.1em;
+        font-weight: bold;
+        margin: 10px 0 6px 0;
+        color: #5a4a3a;
+    }
+
+    .message-content h5, .message-content h6 {
+        font-size: 1em;
+        font-weight: bold;
+        margin: 8px 0 4px 0;
+        color: #5a4a3a;
+    }
+
+    .message-content p {
+        margin: 8px 0;
+        line-height: 1.6;
+    }
+
+    .message-content ul, .message-content ol {
+        margin: 8px 0;
+        padding-left: 24px;
+    }
+
+    .message-content li {
+        margin: 4px 0;
+        line-height: 1.5;
+    }
+
+    .message-content ul li {
+        list-style-type: disc;
+    }
+
+    .message-content ol li {
+        list-style-type: decimal;
+    }
+
+    .message-content strong, .message-content b {
+        font-weight: bold;
+        color: #5a4a3a;
+    }
+
+    .message-content em, .message-content i {
+        font-style: italic;
+    }
+
+    .message-content code {
+        background-color: #f5f1e8;
+        border: 1px solid #e8dfc8;
+        border-radius: 4px;
+        padding: 2px 6px;
+        font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+        font-size: 0.9em;
+        color: #8b7355;
+    }
+
+    .message-content pre {
+        background-color: #f8f6f2;
+        border: 1px solid #e8dfc8;
+        border-radius: 8px;
+        padding: 12px;
+        margin: 12px 0;
+        overflow-x: auto;
+        font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+        font-size: 0.9em;
+        line-height: 1.4;
+    }
+
+    .message-content pre code {
+        background: none;
+        border: none;
+        padding: 0;
+        font-size: inherit;
+        color: inherit;
+    }
+
+    .message-content blockquote {
+        border-left: 4px solid #8b7355;
+        margin: 12px 0;
+        padding: 8px 16px;
+        background-color: #f8f6f2;
+        border-radius: 0 8px 8px 0;
+        font-style: italic;
+        color: #6d5a47;
+    }
+
+    .message-content table {
+        border-collapse: collapse;
+        width: 100%;
+        margin: 12px 0;
+        border: 1px solid #e8dfc8;
+        border-radius: 8px;
+        overflow: hidden;
+    }
+
+    .message-content th, .message-content td {
+        border: 1px solid #e8dfc8;
+        padding: 8px 12px;
+        text-align: left;
+    }
+
+    .message-content th {
+        background-color: #f5f1e8;
+        font-weight: bold;
+        color: #5a4a3a;
+    }
+
+    .message-content tr:nth-child(even) {
+        background-color: #faf9f6;
+    }
+
+    .message-content hr {
+        border: none;
+        border-top: 2px solid #e8dfc8;
+        margin: 16px 0;
+    }
+
+    .message-content a {
+        color: #8b7355;
+        text-decoration: underline;
+    }
+
+    .message-content a:hover {
+        color: #6d5a47;
+        text-decoration: none;
+    }
     
     .message-time {
         font-size: 12px;
@@ -665,11 +818,8 @@ export default {
         // 触发Vuex action来更新store中的用户信息
         this.$store.dispatch('restoreUserInfo', parsedUserInfo);
 
-        // 页面加载时从store恢复历史
-        const history = this.$store.getters.getChatHistory;
-        if (history && Array.isArray(history) && history.length > 0) {
-            this.messages = history.map(msg => ({...msg, timestamp: new Date(msg.timestamp)}));
-        }
+        // 不再从store恢复历史，而是从服务器获取最新的历史记录
+        // 这样可以确保清空历史后不会重新显示旧的历史记录
 
         // 获取当前用户信息
         const user = this.$store.getters.getUserInfo;
@@ -1072,15 +1222,21 @@ export default {
             try {
                 const username = this.getCurrentUsername();
                 const url = `${this.HOST}/chat/conversations/?username=${encodeURIComponent(username)}`;
+                console.log('加载聊天历史 - 用户:', username, '- URL:', url);
+
                 const response = await fetch(url);
 
                 if (response.ok) {
                     const data = await response.json();
+                    console.log('服务器返回的对话数据:', data);
+
                     if (data && data.conversations) {
                         // 过滤掉没有消息的空对话
                         const validConversations = data.conversations.filter(conv =>
                             conv.message_count > 0 && conv.title !== '新对话'
                         );
+
+                        console.log('过滤后的有效对话数:', validConversations.length);
 
                         this.chatHistory = validConversations.map(conv => ({
                             id: conv.id,
@@ -1092,8 +1248,10 @@ export default {
                         return;
                     }
                 }
+                console.log('没有获取到有效的对话数据，清空历史');
                 this.chatHistory = [];
             } catch (error) {
+                console.error('加载聊天历史失败:', error);
                 this.chatHistory = [];
             }
         },
@@ -1157,26 +1315,46 @@ export default {
 
         // 新增：清空聊天历史
         async clearChatHistory() {
+            const username = this.getCurrentUsername();
+            console.log('准备清空用户历史:', username);
+
             this.$confirm('确定要清空所有聊天历史吗？此操作不可恢复！', '警告', {
                 confirmButtonText: '确定',
                 cancelButtonText: '取消',
                 type: 'warning'
             }).then(async () => {
                 try {
+                    console.log('发送清空请求...');
                     const response = await this.apiCall('delete', `${this.HOST}/chat/conversations/clear/`, {
-                        username: this.getCurrentUsername()
+                        username: username
                     });
+
+                    console.log('清空响应:', response.data);
 
                     if (response.status === 200) {
                         // 清空前端显示
                         this.chatHistory = [];
                         this.messages = [];
                         this.currentConversationId = null;
+                        this.currentSessionId = null;
 
-                        // 清空store中的历史记录
+                        // 清空store中的历史记录（这会同时清空localStorage）
                         this.$store.dispatch('clearChatHistory');
 
-                        this.$message.success(`聊天历史已清空，共删除 ${response.data.deleted_count} 个对话`);
+                        // 清空localStorage中的其他相关数据
+                        localStorage.removeItem('currentConversation');
+                        localStorage.removeItem('currentSession');
+
+                        // 立即重新加载历史记录以确保同步
+                        await this.loadChatHistory();
+
+                        console.log('清空后重新加载历史，当前历史数量:', this.chatHistory.length);
+
+                        if (response.data.deleted_count > 0) {
+                            this.$message.success(`聊天历史已清空，共删除 ${response.data.deleted_count} 个记录`);
+                        } else {
+                            this.$message.info('没有找到需要清空的历史记录');
+                        }
                     }
                 } catch (error) {
                     console.error('清空聊天历史失败:', error);
@@ -1220,6 +1398,14 @@ export default {
             this.currentSessionId = null;
             this.currentConversationId = null;
             this.selectedDocumentId = null;
+
+            // 清空store中的当前对话历史（但不清空localStorage中的历史记录）
+            this.$store.dispatch('updateChatHistory', []);
+
+            // 清空localStorage中的当前对话相关数据
+            localStorage.removeItem('currentConversation');
+            localStorage.removeItem('currentSession');
+
             this.$message.success('已开始新对话');
         },
 
