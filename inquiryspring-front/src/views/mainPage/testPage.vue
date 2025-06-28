@@ -48,16 +48,16 @@
     
     <el-container>
         <el-main style="padding: 20px; display: flex; flex-direction: column; height: 100%; background-color: rgba(255,255,255,0.7); border-radius: 16px; margin: 20px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); border: 1px solid rgba(139, 115, 85, 0.1)">
-            <div class="content-container" style="flex: 1; display: flex; flex-direction: column; gap: 30px;">
-                <el-col style="width: 1000px; padding: 30px; background: rgba(255,255,255,0.9); border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); display: flex; gap: 10px;">
+            <!-- <div class="content-container" style="flex: 1; display: flex; flex-direction: column; gap: 30px;"> -->
+                <el-col style="width: 100%; padding: 30px; background: rgba(255,255,255,0.9); border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); display: flex; gap: 48px; align-items: flex-start;">
                     <div style="flex: 1; padding: 10px;">
                         <h3 style="margin-bottom: 15px; display: flex; align-items: center; gap: 5px;">
-                            上传文件
-                            <el-tooltip content="将根据上传的学习材料生成测试题目" placement="right">
+                            选择文件
+                            <el-tooltip content="选择您上传的材料或学习笔记，生成测试题目" placement="right">
                                 <i class="el-icon-question" style="color: #8b7355; font-size: 16px;"></i>
                             </el-tooltip>
                         </h3>
-                        <el-upload
+                        <!-- <el-upload
                         class="upload-demo"
                         drag
                         action="/api/test/"
@@ -65,7 +65,40 @@
                         <i class="el-icon-upload" style="color: #8b7355;"></i>
                         <div class="el-upload__text" style="color: #5a4a3a;">将文件拖到此处，或<em style="color: #8b7355;">点击上传</em></div>
                         <div class="el-upload__tip" slot="tip" style="color: #8b7355;">支持word,pdf格式</div>
-                        </el-upload>
+                        </el-upload> -->
+
+                        <!-- 新增：已上传文件表格，单独分区 -->
+                        <div v-if="uploadedFiles.length" style="margin: 50px 0 0 0; padding: 16px 12px; background: #f8f6f2; border-radius: 8px; box-shadow: 0 2px 8px rgba(139,115,85,0.06); border: 1px solid #e8dfc8; width: 70%; max-width: 400px; min-width: 220px; box-sizing: border-box; display: flex; flex-direction: column; align-items: center;">
+                            <div style="font-weight: bold; color: #8b7355; margin-bottom: 10px; font-size: 15px; letter-spacing: 1px; width: 100%; text-align: left;">当前项目文档</div>
+                            <el-table 
+                                :data="uploadedFiles" 
+                                border 
+                                style="width: 100%; background: #fff;"
+                                highlight-current-row
+                                @current-change="handleFileRowSelect"
+                                :current-row="selectedFileRow"
+                            >
+                                <el-table-column prop="name" label="文件名" min-width="120" align="left">
+                                    <template slot-scope="scope">
+                                        <span :style="scope.row.id === selectedFileId ? 'color: #67c23a;' : 'color: #5a4a3a;'">
+                                            <i class="el-icon-document" style="margin-right: 6px;" :style="scope.row.id === selectedFileId ? 'color: #67c23a;' : 'color: #8b7355;'"></i>{{ scope.row.name }}
+                                        </span>
+                                    </template>
+                                </el-table-column>
+                                <el-table-column label="选择" width="50">
+                                    <template slot-scope="scope">
+                                        <el-radio 
+                                            v-model="selectedFileId" 
+                                            :label="scope.row.id"
+                                            @change="() => onFileRadioChange(scope.row)"
+                                        >
+                                            <!-- 不显示任何label内容，保持圆圈 -->
+                                            <span style="display:none">{{scope.row.id}}</span>
+                                        </el-radio>
+                                    </template>
+                                </el-table-column>
+                            </el-table>
+                        </div>
                     </div>
                     <div style="flex: 1; padding: 15px;">
                         <h3 style="margin-bottom: 15px; display: flex; align-items: center; gap: 5px;">
@@ -247,7 +280,7 @@
                         </div>
                     </div>
                 </el-col>
-            </div>
+            <!-- </div> -->
         </el-main>
     </el-container>
     </el-container>
@@ -346,6 +379,10 @@ import hljs from 'highlight.js/lib/core';
 export default {
     data() {
         return {
+            uploadedFiles:[],
+            selectedFileRow: null, // 当前选中的文件行对象
+            selectedFileName: '', // 当前选中文件名
+            selectedFileId: null, // 新增：当前选中的文件id（用于单选）
             panel: [],
             items: 0,
             testVisible:false,
@@ -356,52 +393,8 @@ export default {
                 desc:""
             },
             q:"ddd",
-            options: [{
-                value: 'A',
-                label: 'A'
-                }, {
-                value: 'B',
-                label: 'B'
-                }, {
-                value: 'C',
-                label: 'C'
-                }, {
-                value: 'D',
-                label: 'D'
-                }],
-            options_2: [{
-                value: '正确',
-                label: '正确'
-                }, {
-                value: '错误',
-                label: '错误'
-                }],
-            question:[
-                {
-                    type:"单选题",
-                    question:"1+1=?",
-                    answer:"2",
-                    analysis:"2是正确的答案"
-                },
-                {
-                    type:"多选题",
-                    question:"2+2=?",
-                    answer:"4",
-                    analysis:"4是正确的答案"
-                },
-                {
-                    type:"判断题",
-                    question:"3>2?",
-                    answer:"是",
-                    analysis:"3大于2"
-                },
-                {
-                    type:"填空题",
-                    question:"4-1=?",
-                    answer:"3",
-                    analysis:"3是正确的答案"
-                }
-            ],
+            options: [],
+            question:[],
             answer: [], // 初始化答案数组
             answerStatus: [], // 答案正误状态
             showAnalysis: [], // 控制每题解析显示
@@ -427,6 +420,44 @@ export default {
             this.username = '未登录';
             this.userInitial = '?';
         }
+
+        //从localStorage恢复当前项目信息，仅同步id和name到store
+        const currentProjectStr = localStorage.getItem('currentProject');
+        let projectId = null;
+        if (currentProjectStr) {
+            try {
+                const currentProject = JSON.parse(currentProjectStr);
+                if (currentProject && currentProject.id && currentProject.name) {
+                    this.$store.dispatch('setCurrentProject', {
+                        id: currentProject.id,
+                        name: currentProject.name
+                    });
+                    projectId = currentProject.id;
+                }
+            } catch (e) {
+                // ignore
+            }
+        }
+
+        // 新增：页面创建时自动请求后端获取当前项目文档列表
+        if (projectId && this.username && this.username !== '未登录') {
+            axios.get(`${this.HOST}/projects/${projectId}/`, {
+                params: {
+                    username: this.username
+                }
+            }).then(res => {
+                if (res.data.data && res.data.data.project && Array.isArray(res.data.data.project.documents)) {
+                    // 只保留文档名，或可根据需要保留更多字段
+                    this.uploadedFiles = res.data.data.project.documents.map(doc => ({
+                        name: doc.title || doc.filename || '',
+                        id:doc.id
+                    }));
+                }
+            }).catch(err => {
+                this.$message.error('获取文档列表失败: ' + (err.response?.data?.error || err.message));
+            });
+        }
+
     },
     methods: {
         gotoChat() {
@@ -461,7 +492,8 @@ export default {
                 question_count: this.testReq.num,
                 question_types: this.testReq.type, // 直接使用中文类型名
                 difficulty: this.mapDifficulty(this.testReq.level),
-                topic: this.testReq.desc || '通用知识'
+                topic: this.testReq.desc || '通用知识',
+                document_id:  this.selectedFileId || ''
             };
 
             console.log('发送测验生成请求:', requestData);
@@ -640,6 +672,16 @@ export default {
                 })
             );
             return marked.parse(message);
+        },
+        // 处理文件行选择
+        handleFileRowSelect(row) {
+            this.selectedFileRow = row;
+            this.selectedFileName = row ? row.name : '';
+        },
+
+        onFileRadioChange(row) {
+            this.selectedFileRow = row;
+            this.selectedFileName = row.name;
         },
     }
 };

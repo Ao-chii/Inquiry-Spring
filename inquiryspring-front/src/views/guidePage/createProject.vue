@@ -25,13 +25,13 @@
       </el-menu>
 
      <!-- 学习计划卡片 -->
-      <div 
+      <!-- <div 
           @click="gotoTaskManage" 
           class="study-plan-card"
       >
           <i class="el-icon-date" style="color: #d48806"></i>
           <span>我的学习计划</span>
-      </div>
+      </div> -->
 
       <!-- 用户信息展示 -->
       <div class="user-info" style="position: fixed; bottom: 0; left: 0; width: 240px; padding: 15px; border-top: 1px solid #e0d6c2; background: #f1e9dd;">
@@ -279,7 +279,11 @@ export default {
       this.uploadLoading = false;
       if (response.data && response.data.document_id) {
         // 上传成功后将文档加入当前项目文档列表
-        if (this.currentProject && Array.isArray(this.currentProject.documents)) {
+        if (this.currentProject) {
+          if (!Array.isArray(this.currentProject.documents)) {
+            // 关键修复：首次上传时初始化documents为数组
+            this.$set(this.currentProject, 'documents', []);
+          }
           this.currentProject.documents.push({
             name: response.data.filename,
             size: file.size ? Math.round(file.size / 1024) + 'KB' : '未知',

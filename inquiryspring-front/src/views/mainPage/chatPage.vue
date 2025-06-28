@@ -684,7 +684,27 @@ export default {
 
         // 获取聊天历史
         this.loadChatHistory();
+        
+        //从localStorage恢复当前项目信息，仅同步id和name到store
+        const currentProjectStr = localStorage.getItem('currentProject');
+        //let projectId = null;
+        if (currentProjectStr) {
+            try {
+                const currentProject = JSON.parse(currentProjectStr);
+                if (currentProject && currentProject.id && currentProject.name) {
+                    this.$store.dispatch('setCurrentProject', {
+                        id: currentProject.id,
+                        name: currentProject.name
+                    });
+                    //projectId = currentProject.id;
+                }
+            } catch (e) {
+                // ignore
+            }
+        }
+
     },
+
     mounted() {
         // 页面初次渲染后自动滚动到底部
         this.$nextTick(() => {

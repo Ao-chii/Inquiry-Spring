@@ -670,7 +670,7 @@ def test_project_upload(request, project_id):
 
 @api_view(['POST'])
 def delete_project(request, project_id):
-    """级联删除项目及其所有相关文档信息"""
+    """级联删除项目及其所有相关文档信息，并删除vector_store下的向量数据库文件"""
     try:
         project = get_object_or_404(Project, id=project_id, is_active=True)
         # 级联删除所有项目-文档关联
@@ -680,6 +680,8 @@ def delete_project(request, project_id):
         project_docs.delete()
         # 删除文档（如有需要，可只删除未被其他项目引用的文档）
         from ..documents.models import Document
+        from django.conf import settings
+        import glob
         for doc_id in doc_ids:
             # 检查该文档是否还被其他项目引用
             if not ProjectDocument.objects.filter(document_id=doc_id).exists():
@@ -688,6 +690,16 @@ def delete_project(request, project_id):
                     # 删除文件
                     if doc.file and hasattr(doc.file, 'path') and os.path.exists(doc.file.path):
                         os.remove(doc.file.path)
+                    # 删除vector_store下的所有相关目录（如vector_store/45/、vector_store/45_*）
+                    vector_store_dir = os.path.join(settings.BASE_DIR, 'vector_store')
+                    # 支持多embedding模型的目录，如vector_store/45/、vector_store/45_*
+                    pattern = os.path.join(vector_store_dir, f"{doc_id}*")
+                    for path in glob.glob(pattern):
+                        if os.path.isdir(path):
+                            import shutil
+                            shutil.rmtree(path, ignore_errors=True)
+                        elif os.path.isfile(path):
+                            os.remove(path)
                     doc.delete()
                 except Exception:
                     pass
@@ -703,7 +715,7 @@ def delete_project(request, project_id):
 
 @api_view(['POST'])
 def delete_document(request, project_id):
-    """级联删除项目下指定文档及其所有相关信息"""
+    """级联删除项目下指定文档及其所有相关信息，并删除vector_store下的向量数据库文件"""
     try:
         filename = request.data.get('filename')
         if not filename:
@@ -716,11 +728,22 @@ def delete_document(request, project_id):
         doc = proj_doc.document
         # 删除项目-文档关联
         proj_doc.delete()
-        # 如果该文档未被其他项目引用，则删除文档及其文件
+        # 如果该文档未被其他项目引用，则删除文档及其文件和向量库
         if not ProjectDocument.objects.filter(document=doc).exists():
             try:
                 if doc.file and hasattr(doc.file, 'path') and os.path.exists(doc.file.path):
                     os.remove(doc.file.path)
+                # 删除vector_store下的所有相关目录（如vector_store/45/、vector_store/45_*）
+                from django.conf import settings
+                import glob
+                vector_store_dir = os.path.join(settings.BASE_DIR, 'vector_store')
+                pattern = os.path.join(vector_store_dir, f"{doc.id}*")
+                for path in glob.glob(pattern):
+                    if os.path.isdir(path):
+                        import shutil
+                        shutil.rmtree(path, ignore_errors=True)
+                    elif os.path.isfile(path):
+                        os.remove(path)
                 doc.delete()
             except Exception:
                 pass
