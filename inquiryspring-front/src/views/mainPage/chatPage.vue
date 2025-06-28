@@ -80,6 +80,8 @@
                         </div>
 
                         <div class="panel-content" style="flex: 1; overflow-y: auto;">
+
+
                             <div v-if="chatHistory.length" class="history-list">
                                 <div
                                     v-for="session in chatHistory"
@@ -684,6 +686,7 @@ export default {
 
         // 获取聊天历史
         this.loadChatHistory();
+
         
         //从localStorage恢复当前项目信息，仅同步id和name到store
         const currentProjectStr = localStorage.getItem('currentProject');
@@ -835,6 +838,9 @@ export default {
                         if (container) container.scrollTop = container.scrollHeight;
                     });
                 }
+
+                // 重新加载聊天历史（确保新对话出现在历史列表中）
+                this.loadChatHistory();
 
                 this.isWaitingForAI = false;
 
@@ -1064,26 +1070,31 @@ export default {
         // 新增：加载聊天历史
         async loadChatHistory() {
             try {
-                const response = await this.apiCall('get', `${this.HOST}/chat/conversations/`, null, {
-                    params: { username: this.getCurrentUsername() }
-                });
+                const username = this.getCurrentUsername();
+                const url = `${this.HOST}/chat/conversations/?username=${encodeURIComponent(username)}`;
+                const response = await fetch(url);
 
-                if (response.data && response.data.conversations) {
-                    this.chatHistory = response.data.conversations.map(conv => ({
-                        id: conv.id,
-                        user_message: conv.title,
-                        timestamp: new Date(conv.updated_at),
-                        messages: [], // 消息将在点击时加载
-                        message_count: conv.message_count
-                    }));
-                    console.log('加载聊天历史成功:', this.chatHistory);
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data && data.conversations) {
+                        // 过滤掉没有消息的空对话
+                        const validConversations = data.conversations.filter(conv =>
+                            conv.message_count > 0 && conv.title !== '新对话'
+                        );
+
+                        this.chatHistory = validConversations.map(conv => ({
+                            id: conv.id,
+                            user_message: conv.title,
+                            timestamp: new Date(conv.updated_at),
+                            messages: [],
+                            message_count: conv.message_count
+                        }));
+                        return;
+                    }
                 }
+                this.chatHistory = [];
             } catch (error) {
-                // 回退到本地存储
-                const history = this.$store.getters.getChatHistory;
-                if (history && Array.isArray(history)) {
-                    this.chatHistory = this.groupChatHistory(history);
-                }
+                this.chatHistory = [];
             }
         },
 
@@ -1131,14 +1142,9 @@ export default {
                         const container = document.querySelector('.message-list');
                         if (container) container.scrollTop = container.scrollHeight;
                     });
-
-                    console.log('加载对话详情成功:', this.messages);
                 }
             } catch (error) {
-                console.error('加载对话详情失败:', error);
-                this.$message.error('加载对话失败: ' + (error.response?.data?.error || error.message));
-
-                // 回退到原有逻辑
+                this.$message.error('加载对话失败');
                 if (session.messages && session.messages.length > 0) {
                     this.messages = session.messages.map(msg => ({
                         ...msg,
@@ -1208,31 +1214,13 @@ export default {
         },
 
         // 新增：开始新对话
-        async startNewChat() {
-            try {
-                const response = await this.apiCall('post', `${this.HOST}/chat/conversations/`, {
-                    username: this.getCurrentUsername(),
-                    title: '新对话'
-                });
-
-                if (response.status === 201) {
-                    // 清空当前聊天状态
-                    this.messages = [];
-                    this.currentSessionId = null;
-                    this.selectedDocumentId = null;
-
-                    // 设置新的对话ID
-                    this.currentConversationId = response.data.conversation.id;
-
-                    // 重新加载聊天历史
-                    await this.loadChatHistory();
-
-                    this.$message.success('已开始新对话');
-                }
-            } catch (error) {
-                console.error('创建新对话失败:', error);
-                this.$message.error('创建新对话失败: ' + (error.response?.data?.error || error.message));
-            }
+        startNewChat() {
+            // 清空当前聊天状态，开始新对话
+            this.messages = [];
+            this.currentSessionId = null;
+            this.currentConversationId = null;
+            this.selectedDocumentId = null;
+            this.$message.success('已开始新对话');
         },
 
         // 新增：删除会话
@@ -1243,23 +1231,21 @@ export default {
                 type: 'warning'
             }).then(async () => {
                 try {
-                    const response = await this.apiCall('delete', `${this.HOST}/chat/conversations/${session.id}/`);
+                    const url = `${this.HOST}/chat/conversations/${session.id}/`;
+                    const response = await fetch(url, { method: 'DELETE' });
 
-                    if (response.status === 200) {
-                        // 从历史记录中移除这个会话
+                    if (response.ok) {
                         this.chatHistory = this.chatHistory.filter(s => s.id !== session.id);
-
-                        // 如果删除的是当前会话，清空当前消息
                         if (this.currentConversationId === session.id) {
                             this.messages = [];
                             this.currentConversationId = null;
                         }
-
                         this.$message.success('对话已删除');
+                    } else {
+                        this.$message.error('删除失败');
                     }
                 } catch (error) {
-                    console.error('删除对话失败:', error);
-                    this.$message.error('删除失败: ' + (error.response?.data?.error || error.message));
+                    this.$message.error('删除失败');
                 }
             }).catch(() => {
                 this.$message.info('已取消删除');

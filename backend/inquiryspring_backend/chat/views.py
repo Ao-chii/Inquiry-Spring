@@ -12,7 +12,8 @@ from datetime import datetime
 
 from .models import ChatSession, Message, Conversation
 from ..ai_services.rag_engine import RAGEngine
-from ..documents.models import Document, UploadedFile
+from ..documents.models import Document
+from ..projects.models import Project, ProjectDocument
 
 logger = logging.getLogger(__name__)
 
@@ -146,12 +147,14 @@ class ChatView(View):
         # 如果没有对话，创建新对话
         if not conversation:
             from .models import Conversation
+            # 使用用户第一次输入的前30个字符作为对话标题
+            title = user_message[:30] + ('...' if len(user_message) > 30 else '')
             conversation = Conversation.objects.create(
                 username=username,
-                title=user_message[:50] + ('...' if len(user_message) > 50 else ''),
+                title=title,
                 message_count=0
             )
-            logger.info(f"创建新对话: {conversation.id}")
+            logger.info(f"创建新对话: {conversation.id}, 标题: {title}")
 
         return conversation
 
@@ -227,173 +230,39 @@ def chat_status(request, session_id):
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
-@api_view(['GET'])
-def chat_history(request):
-    """获取聊天历史"""
-    try:
-        messages = ChatSession.objects.filter(is_ready=True)[:20]  # 只返回已完成的消息
-        history = []
-
-        for msg in messages:
-            history.append({
-                'id': msg.id,
-                'user_message': msg.user_message,
-                'ai_response': msg.ai_response,
-                'timestamp': msg.timestamp.isoformat()
-            })
-
-        return Response({'history': history})
-
-    except Exception as e:
-        logger.error(f"获取聊天历史失败: {e}")
-        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-
 # 删除了聊天反馈功能
 
 
-@method_decorator(csrf_exempt, name='dispatch')
-class ChatDocumentUploadView(View):
-    """聊天中的文档上传视图 - 兼容前端文件上传"""
-
-    def post(self, request):
-        """上传文档用于聊天上下文"""
-        try:
-            if 'file' not in request.FILES:
-                return JsonResponse({'error': '没有选择文件'}, status=400)
-
-            file = request.FILES['file']
-
-            if file.name == '':
-                return JsonResponse({'error': '没有选择文件'}, status=400)
-
-            # 导入文档处理相关模块
-            from ..documents.views import allowed_file
-            from ..documents.document_processor import document_processor
-            from django.conf import settings
-            from django.utils import timezone
-            import os
-            import re
-
-            def secure_filename(filename):
-                """安全的文件名处理"""
-                # 移除路径分隔符和危险字符
-                filename = re.sub(r'[^\w\s\-\.]', '', filename).strip()
-                # 替换空格为下划线
-                filename = re.sub(r'[\-\s]+', '_', filename)
-                return filename
-
-            if not allowed_file(file.name):
-                return JsonResponse({'error': '不支持的文件类型'}, status=400)
-
-            # 检查文档处理器是否可用
-            if not document_processor.available:
-                return JsonResponse({
-                    'error': '文档处理功能不可用'
-                }, status=500)
-
-            # 保存文件到临时位置
-            filename = secure_filename(file.name)
-            upload_dir = os.path.join(settings.MEDIA_ROOT, 'uploads')
-            os.makedirs(upload_dir, exist_ok=True)
-
-            file_path = os.path.join(upload_dir, filename)
-
-            with open(file_path, 'wb+') as destination:
-                for chunk in file.chunks():
-                    destination.write(chunk)
-
-            # 验证文件
-            validation = document_processor.validate_file(file_path, filename)
-            if not validation['valid']:
-                # 删除临时文件
-                if os.path.exists(file_path):
-                    os.remove(file_path)
-                return JsonResponse({'error': validation['error']}, status=400)
-
-            # 创建Document记录
-            document = Document.objects.create(
-                title=filename,  # 使用原始文件名
-                file_type=validation['file_type'],
-                file_size=validation['file_size'],
-                processing_status='processing'
-            )
-
-            # 更新文件路径（包含document ID）
-            final_dir = os.path.join(settings.MEDIA_ROOT, 'documents', str(document.id))
-            os.makedirs(final_dir, exist_ok=True)
-            final_path = os.path.join(final_dir, filename)
-
-            # 移动文件到最终位置
-            # 如果目标文件已存在，先删除它
-            if os.path.exists(final_path):
-                os.remove(final_path)
-            os.rename(file_path, final_path)
-
-            # 更新document记录
-            document.file.name = f'documents/{document.id}/{filename}'
-            document.save()
-
-            # 提取文档内容
-            extraction_result = document_processor.extract_text(final_path, filename)
-
-            if extraction_result['success']:
-                # 更新文档记录
-                document.content = extraction_result['content']
-                document.metadata = extraction_result['metadata']
-                document.is_processed = True
-                document.processing_status = 'completed'
-                document.processed_at = timezone.now()
-                document.save()
-
-                logger.info(f"聊天文档处理成功: {filename}")
-
-                # 立即进行RAG处理和向量化
-                try:
-                    from ..ai_services import process_document_for_rag
-                    rag_processing_result = process_document_for_rag(document.id, force_reprocess=True)
-
-                    if rag_processing_result:
-                        logger.info(f"聊天文档RAG处理成功: {filename}")
-                    else:
-                        logger.warning(f"聊天文档RAG处理失败: {filename}")
-
-                except Exception as e:
-                    logger.error(f"聊天文档RAG处理异常: {filename}, 错误: {e}")
-                    # RAG处理失败不影响文档上传成功
-
-                return JsonResponse({
-                    'message': '文档上传成功，现在可以基于此文档进行问答',
-                    'document_id': document.id,
-                    'filename': filename,
-                    'content_length': len(extraction_result['content']),
-                    'file_type': validation['file_type'],
-                    'status': 'success'
-                })
-            else:
-                # 处理失败
-                document.processing_status = 'failed'
-                document.error_message = extraction_result['error']
-                document.save()
-
-                return JsonResponse({
-                    'error': f'文档处理失败: {extraction_result["error"]}',
-                    'document_id': document.id
-                }, status=500)
-
-        except Exception as e:
-            logger.error(f"聊天文档上传失败: {e}")
-            return JsonResponse({'error': f'上传失败: {str(e)}'}, status=500)
+# 删除了ChatDocumentUploadView - 现在使用项目管理的文档上传功能
 
 
 @api_view(['GET'])
 def chat_documents(request):
-    """获取聊天中可用的文档列表"""
+    """获取聊天中可用的文档列表 - 从项目管理数据库获取"""
     try:
-        # 获取所有已处理的文档，不限制为聊天文档
-        documents = Document.objects.filter(
-            is_processed=True
-        ).order_by('-uploaded_at')[:20]
+        # 获取用户名参数
+        username = request.GET.get('username', '')
+
+        if username:
+            # 如果提供了用户名，获取该用户的项目文档
+            from django.contrib.auth.models import User
+            try:
+                user = User.objects.get(username=username)
+                # 获取用户项目中的所有文档
+                project_documents = ProjectDocument.objects.filter(
+                    project__user=user,
+                    project__is_active=True,
+                    document__is_processed=True
+                ).select_related('document').order_by('-document__uploaded_at')[:20]
+
+                documents = [pd.document for pd in project_documents]
+            except User.DoesNotExist:
+                documents = []
+        else:
+            # 如果没有用户名，获取所有已处理的文档
+            documents = Document.objects.filter(
+                is_processed=True
+            ).order_by('-uploaded_at')[:20]
 
         doc_list = []
         for doc in documents:
@@ -420,12 +289,15 @@ def chat_documents(request):
 
 @api_view(['DELETE'])
 def delete_document(request, document_id):
-    """删除文档"""
+    """删除文档 - 兼容chat界面的文档删除功能"""
     try:
         document = Document.objects.get(id=document_id)
         document_title = document.title
 
-        # 删除文档
+        # 删除项目文档关联
+        ProjectDocument.objects.filter(document=document).delete()
+
+        # 删除文档本身
         document.delete()
 
         logger.info(f"文档删除成功: {document_title}")

@@ -67,17 +67,4 @@ class DocumentChunk(models.Model):
         return f'{self.document.title} - 分块 {self.chunk_index}'
 
 
-class UploadedFile(models.Model):
-    """上传文件（兼容旧版本）"""
-    filename = models.CharField('文件名', max_length=255)
-    file_path = models.CharField('文件路径', max_length=500)
-    file_size = models.BigIntegerField('文件大小', default=0)
-    upload_time = models.DateTimeField('上传时间', auto_now_add=True)
-    
-    class Meta:
-        verbose_name = '上传文件'
-        verbose_name_plural = '上传文件'
-        ordering = ['-upload_time']
-
-    def __str__(self):
-        return self.filename
+# 删除了UploadedFile模型 - 现在统一使用Document模型和项目管理

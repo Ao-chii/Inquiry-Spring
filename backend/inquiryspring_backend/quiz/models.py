@@ -79,7 +79,95 @@ class Question(models.Model):
             self.question_text = self.content
         elif self.question_text and not self.content:
             self.content = self.question_text
+
+        # 处理correct_answer字段 - 确保列表格式正确存储
+        if hasattr(self, '_correct_answer_list'):
+            # 如果设置了列表格式的答案，转换为适当的存储格式
+            self._save_correct_answer_from_list()
+
         super().save(*args, **kwargs)
+
+    def _save_correct_answer_from_list(self):
+        """将列表格式的正确答案转换为存储格式"""
+        if hasattr(self, '_correct_answer_list'):
+            answer_list = self._correct_answer_list
+            if isinstance(answer_list, list) and len(answer_list) > 1:
+                # 多选题，存储为JSON字符串
+                import json
+                self.correct_answer = json.dumps(answer_list, ensure_ascii=False)
+            elif isinstance(answer_list, list) and len(answer_list) == 1:
+                # 单选题，存储为字符串
+                self.correct_answer = str(answer_list[0])
+            else:
+                # 其他情况，直接转换为字符串
+                self.correct_answer = str(answer_list) if answer_list else ''
+            delattr(self, '_correct_answer_list')
+
+    def get_correct_answer_list(self):
+        """获取正确答案列表，自动处理JSON格式"""
+        try:
+            import json
+            # 尝试解析JSON格式的答案（多选题）
+            if isinstance(self.correct_answer, str) and self.correct_answer.startswith('['):
+                return json.loads(self.correct_answer)
+            else:
+                # 单选题或其他类型，返回单个答案的列表
+                return [self.correct_answer] if self.correct_answer else []
+        except (json.JSONDecodeError, AttributeError):
+            # 如果解析失败，返回原始答案
+            return [self.correct_answer] if self.correct_answer else []
+
+    def set_correct_answer_list(self, answer_list):
+        """设置正确答案列表，延迟到save时处理"""
+        self._correct_answer_list = answer_list
+
+    @classmethod
+    def create_with_correct_answer(cls, quiz, correct_answer, **kwargs):
+        """创建Question实例，正确处理correct_answer字段"""
+        # 处理correct_answer字段
+        if isinstance(correct_answer, list):
+            if len(correct_answer) > 1:
+                # 多选题，存储为JSON字符串
+                import json
+                kwargs['correct_answer'] = json.dumps(correct_answer, ensure_ascii=False)
+            elif len(correct_answer) == 1:
+                # 单选题，存储为字符串
+                kwargs['correct_answer'] = str(correct_answer[0])
+            else:
+                # 空列表
+                kwargs['correct_answer'] = ''
+        else:
+            # 非列表类型，直接存储
+            kwargs['correct_answer'] = str(correct_answer) if correct_answer is not None else ''
+
+        return cls(quiz=quiz, **kwargs)
+
+    def get_correct_answer_list(self):
+        """获取正确答案列表，处理多选题的JSON格式"""
+        try:
+            import json
+            # 尝试解析JSON格式的答案（多选题）
+            if self.correct_answer.startswith('[') and self.correct_answer.endswith(']'):
+                return json.loads(self.correct_answer)
+            else:
+                # 单选题或其他类型，返回单个答案
+                return [self.correct_answer]
+        except (json.JSONDecodeError, AttributeError):
+            # 如果解析失败，返回原始答案
+            return [self.correct_answer] if self.correct_answer else []
+
+    def set_correct_answer_list(self, answer_list):
+        """设置正确答案列表，自动处理多选题的JSON格式"""
+        if isinstance(answer_list, list) and len(answer_list) > 1:
+            # 多选题，存储为JSON
+            import json
+            self.correct_answer = json.dumps(answer_list, ensure_ascii=False)
+        elif isinstance(answer_list, list) and len(answer_list) == 1:
+            # 单选题，存储为字符串
+            self.correct_answer = str(answer_list[0])
+        else:
+            # 其他情况，直接存储
+            self.correct_answer = str(answer_list) if answer_list else ''
 
     class Meta:
         verbose_name = '题目'
