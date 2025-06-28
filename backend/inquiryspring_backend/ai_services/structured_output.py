@@ -30,7 +30,6 @@ class Quiz(BaseModel):
 
 class ChatResponse(BaseModel):
     answer: str
-    sources: Optional[List[Dict[str, Any]]] = None
 
 class SummaryResponse(BaseModel):
     summary: str
