@@ -283,25 +283,46 @@ def chat_upload_document(request):
 
 @api_view(['GET'])
 def chat_documents(request):
-    """获取聊天中可用的文档列表 - 从项目管理数据库获取"""
+    """获取聊天中可用的文档列表 - 从项目管理数据库获取，支持项目过滤"""
     try:
-        # 获取用户名参数
+        # 获取参数
         username = request.GET.get('username', '')
+        project_id = request.GET.get('project_id', '')
 
         if username:
             # 如果提供了用户名，获取该用户的项目文档
             from django.contrib.auth.models import User
             try:
                 user = User.objects.get(username=username)
-                # 获取用户项目中的所有文档
+
+                # 构建查询条件
+                query_filter = {
+                    'project__user': user,
+                    'project__is_active': True,
+                    'document__is_processed': True
+                }
+
+                # 如果指定了项目ID，只获取该项目的文档
+                if project_id:
+                    query_filter['project__id'] = project_id
+                    logger.info(f"获取项目 {project_id} 的文档列表")
+                else:
+                    logger.info(f"获取用户 {username} 的所有项目文档")
+
+                # 获取用户项目中的文档
                 project_documents = ProjectDocument.objects.filter(
-                    project__user=user,
-                    project__is_active=True,
-                    document__is_processed=True
-                ).select_related('document').order_by('-document__uploaded_at')[:20]
+                    **query_filter
+                ).select_related('document', 'project').order_by('-document__uploaded_at')[:20]
 
                 documents = [pd.document for pd in project_documents]
+
+                # 记录项目信息用于调试
+                if project_documents:
+                    project_names = list(set([pd.project.name for pd in project_documents]))
+                    logger.info(f"找到文档 {len(documents)} 个，来自项目: {project_names}")
+
             except User.DoesNotExist:
+                logger.warning(f"用户不存在: {username}")
                 documents = []
         else:
             # 如果没有用户名，获取所有已处理的文档
@@ -324,7 +345,9 @@ def chat_documents(request):
 
         return Response({
             'documents': doc_list,
-            'count': len(doc_list)
+            'count': len(doc_list),
+            'project_id': project_id if project_id else None,
+            'username': username
         })
 
     except Exception as e:

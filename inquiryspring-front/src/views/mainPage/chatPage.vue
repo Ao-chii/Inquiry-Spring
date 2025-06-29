@@ -1155,10 +1155,20 @@ export default {
         // 新增：加载可用文档列表
         async loadAvailableDocuments() {
             try {
-                const response = await this.apiCall('get', `${this.HOST}/chat/documents/`);
+                const username = this.getCurrentUsername();
+                const currentProjectId = this.$store.getters.getSelectedPrjId;
+
+                // 构建请求URL，包含用户名和项目ID
+                let url = `${this.HOST}/chat/documents/?username=${encodeURIComponent(username)}`;
+                if (currentProjectId) {
+                    url += `&project_id=${currentProjectId}`;
+                }
+
+                const response = await this.apiCall('get', url);
                 if (response.data && response.data.documents) {
                     this.availableDocuments = response.data.documents;
                     console.log('加载文档列表成功:', this.availableDocuments);
+                    console.log('当前项目ID:', currentProjectId);
                 }
             } catch (error) {
                 this.$message.error('加载文档列表失败: ' + (error.response?.data?.error || error.message));
