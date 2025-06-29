@@ -1325,8 +1325,10 @@ export default {
             }).then(async () => {
                 try {
                     console.log('发送清空请求...');
-                    const response = await this.apiCall('delete', `${this.HOST}/chat/conversations/clear/`, {
-                        username: username
+                    const response = await axios.delete(`${this.HOST}/chat/conversations/clear/`, {
+                        data: {
+                            username: username
+                        }
                     });
 
                     console.log('清空响应:', response.data);
@@ -1417,6 +1419,7 @@ export default {
                 type: 'warning'
             }).then(async () => {
                 try {
+                    // 修复URL路径，HOST已经包含/api
                     const url = `${this.HOST}/chat/conversations/${session.id}/`;
                     const response = await fetch(url, { method: 'DELETE' });
 
@@ -1427,10 +1430,14 @@ export default {
                             this.currentConversationId = null;
                         }
                         this.$message.success('对话已删除');
+                        // 重新加载聊天历史以确保同步
+                        await this.loadChatHistory();
                     } else {
-                        this.$message.error('删除失败');
+                        const errorData = await response.json().catch(() => ({}));
+                        this.$message.error(`删除失败: ${errorData.error || '未知错误'}`);
                     }
                 } catch (error) {
+                    console.error('删除会话失败:', error);
                     this.$message.error('删除失败');
                 }
             }).catch(() => {

@@ -9,6 +9,9 @@ urlpatterns = [
     # 状态检查 - 前端使用 /api/chat/status/{id}/
     path('status/<int:session_id>/', views.chat_status, name='chat_status'),
 
+    # 文档上传 - 前端使用 /api/chat/upload/
+    path('upload/', views.chat_upload_document, name='chat_upload_document'),
+
     # 文档列表 - 前端使用 /api/chat/documents/ (现在从项目管理获取)
     path('documents/', views.chat_documents, name='chat_documents'),
 

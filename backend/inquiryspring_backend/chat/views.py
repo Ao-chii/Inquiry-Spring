@@ -233,7 +233,52 @@ def chat_status(request, session_id):
 # 删除了聊天反馈功能
 
 
-# 删除了ChatDocumentUploadView - 现在使用项目管理的文档上传功能
+@api_view(['POST'])
+def chat_upload_document(request):
+    """聊天模块文档上传接口 - 简化版本"""
+    try:
+        if 'file' not in request.FILES:
+            return Response({'error': '没有选择文件'}, status=status.HTTP_400_BAD_REQUEST)
+
+        file = request.FILES['file']
+        if file.name == '':
+            return Response({'error': '没有选择文件'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # 直接调用文档上传视图的逻辑
+        from ..documents.views import SummarizeView
+        summarize_view = SummarizeView()
+
+        # 创建一个模拟的request对象
+        mock_request = type('MockRequest', (), {
+            'FILES': request.FILES,
+            'method': 'POST'
+        })()
+
+        # 调用文档上传处理
+        response = summarize_view.post(mock_request)
+
+        # 转换响应格式以匹配前端期望
+        if hasattr(response, 'content'):
+            import json
+            response_data = json.loads(response.content.decode('utf-8'))
+            if 'document_info' in response_data:
+                doc_info = response_data['document_info']
+                return Response({
+                    'message': '文档上传成功',
+                    'filename': doc_info.get('filename', file.name),
+                    'document_id': doc_info.get('id'),
+                    'file_type': doc_info.get('file_type'),
+                    'file_size': doc_info.get('file_size'),
+                    'processed': True
+                })
+            elif 'error' in response_data:
+                return Response({'error': response_data['error']}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        return Response({'error': '文档上传失败'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    except Exception as e:
+        logger.error(f"聊天文档上传失败: {e}")
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 @api_view(['GET'])
