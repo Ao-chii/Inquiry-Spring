@@ -54,13 +54,28 @@ class ChatView(View):
             # 确定文档上下文策略
             document_to_use = self._determine_document_context(selected_document_id)
 
+            # 获取对话历史（排除刚刚保存的用户消息）
+            conversation_history = self._get_conversation_history(conversation, exclude_last=True)
+
+            # 获取User对象（如果需要）
+            user_obj = None
+            if username:
+                try:
+                    from django.contrib.auth.models import User
+                    user_obj, _ = User.objects.get_or_create(username=username)
+                except Exception as e:
+                    logger.warning(f"获取用户对象失败: {e}")
+
             # 直接使用RAGEngine处理 - 信任其内置的智能判断
             try:
                 if document_to_use:
                     # 有文档上下文 - 让RAGEngine自己决定是否使用
                     ai_result = RAGEngine(document_id=document_to_use.id).handle_chat(
                         query=user_message,
-                        document_id=document_to_use.id
+                        document_id=document_to_use.id,
+                        conversation_history=conversation_history,
+                        user=user_obj,
+                        session_id=str(conversation.id)
                     )
                     used_document_info = {
                         'id': document_to_use.id,
@@ -68,7 +83,12 @@ class ChatView(View):
                     }
                 else:
                     # 无文档上下文 - 纯聊天模式
-                    ai_result = RAGEngine().handle_chat(query=user_message)
+                    ai_result = RAGEngine().handle_chat(
+                        query=user_message,
+                        conversation_history=conversation_history,
+                        user=user_obj,
+                        session_id=str(conversation.id)
+                    )
                     used_document_info = None
 
                 ai_response = ai_result.get("answer", "抱歉，AI服务暂时不可用")
@@ -173,6 +193,36 @@ class ChatView(View):
 
         # 如果没有选择文档，返回None，让RAGEngine处理纯聊天
         return None
+
+    def _get_conversation_history(self, conversation, exclude_last=False, max_messages=10):
+        """获取对话历史，格式化为RAGEngine期望的格式"""
+        try:
+            # 获取对话中的消息，按时间排序
+            messages = list(conversation.messages.order_by('created_at'))
+
+            if exclude_last and messages:
+                # 排除最后一条消息（通常是刚刚保存的用户消息）
+                messages = messages[:-1]
+
+            # 限制消息数量，避免上下文过长
+            if len(messages) > max_messages:
+                messages = messages[-max_messages:]
+
+            # 转换为RAGEngine期望的格式
+            history = []
+            for msg in messages:
+                history.append({
+                    'role': 'user' if msg.is_user else 'assistant',
+                    'content': msg.content,
+                    'timestamp': msg.created_at.isoformat() if msg.created_at else None
+                })
+
+            logger.info(f"获取对话历史: {len(history)} 条消息")
+            return history
+
+        except Exception as e:
+            logger.error(f"获取对话历史失败: {e}")
+            return []
 
     def get(self, request):
         """获取最新的AI回复"""
