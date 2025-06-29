@@ -46,72 +46,189 @@
         </div>
     </el-aside>
     
-    <el-container>
-        <el-main style="padding: 20px; display: flex; flex-direction: column; height: 100%; background-color: rgba(255,255,255,0.7); border-radius: 16px; margin: 20px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); border: 1px solid rgba(139, 115, 85, 0.1)">
-            <div class="chat-container">
-                <div class="message-list">
-                    <div 
-                        v-for="(message, index) in messages" 
-                        :key="index" 
-                        :class="['message-bubble', message.isUser ? 'user-message' : 'ai-message']">
-                        <div class="message-content" v-html="markdownToHtml(message.text)"></div>
-                        <div class="message-time">{{ formatTime(message.timestamp) }}</div>
-                    </div>
-                    <!-- AI处理中提示 -->
-                    <div v-if="isWaitingForAI" class="message-bubble ai-message">
-                        <div class="message-content">
-                            <span class="ai-loading">
-                                <span class="dot"></span><span class="dot"></span><span class="dot"></span>
-                            </span>
-                            <span style="margin-left: 10px;">正在思考中...</span>
+    <el-container style="height: 100vh; overflow: hidden;">
+        <el-main style="padding: 10px; display: flex; height: 100%; background-color: rgba(255,255,255,0.7); border-radius: 16px; margin: 20px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); border: 1px solid rgba(139, 115, 85, 0.1); overflow: hidden;">
+            <div style="display: flex; width: 100%; height: 100%; gap: 20px;">
+                <!-- 左侧聊天历史区域 - 固定 -->
+                <div style="width: 300px; display: flex; flex-direction: column; height: 100%;">
+                    <div class="sidebar-panel" style="height: 100%; display: flex; flex-direction: column;">
+                        <div class="panel-header" style="flex-shrink: 0;">
+                            <div class="header-title">
+                                <i class="el-icon-chat-line-round"></i>
+                                <span>聊天历史</span>
+                            </div>
+                            <div class="header-actions">
+                                <el-tooltip content="新建对话" placement="top">
+                                    <el-button
+                                        @click="startNewChat"
+                                        type="text"
+                                        class="action-btn"
+                                        size="mini">
+                                        <i class="el-icon-plus"></i>
+                                    </el-button>
+                                </el-tooltip>
+                                <el-tooltip content="清空历史" placement="top">
+                                    <el-button
+                                        @click="clearChatHistory"
+                                        type="text"
+                                        class="action-btn danger"
+                                        size="mini">
+                                        <i class="el-icon-delete"></i>
+                                    </el-button>
+                                </el-tooltip>
+                            </div>
                         </div>
-                        <div class="message-time">问泉</div>
+
+                        <div class="panel-content" style="flex: 1; overflow-y: auto;">
+
+
+                            <div v-if="chatHistory.length" class="history-list">
+                                <div
+                                    v-for="session in chatHistory"
+                                    :key="session.id"
+                                    class="history-item"
+                                    @click="loadChatSession(session)"
+                                    :class="{ 'active': currentSessionId === session.id }"
+                                >
+                                    <div class="history-content">
+                                        <div class="history-preview">{{ getSessionTitle(session) }}</div>
+                                    </div>
+                                    <div class="history-actions">
+                                        <el-button
+                                            @click.stop="deleteSession(session)"
+                                            type="text"
+                                            class="delete-session-btn"
+                                            size="mini">
+                                            <i class="el-icon-close"></i>
+                                        </el-button>
+                                    </div>
+                                </div>
+                            </div>
+                            <div v-else class="empty-state">
+                                <i class="el-icon-chat-dot-round"></i>
+                                <p>暂无聊天记录</p>
+                                <el-button @click="startNewChat" type="text" class="start-chat-btn">
+                                    开始新对话
+                                </el-button>
+                            </div>
+                        </div>
                     </div>
                 </div>
-                <div class="input-area" style="display: flex; gap: 10px; align-items: center;">
-                    <el-input 
-                        type="textarea" 
-                        :rows="1" 
-                        placeholder="输入你的问题..."
-                        v-model="inputMessage"
-                        @keyup.enter.native="sendMessage"
-                        resize="none"
-                        style="flex: 1; border-radius: 24px; padding: 12px 20px;">
-                    </el-input>
-                    <el-button
-                        type="default"
-                        style="background: linear-gradient(135deg, #f5f1e8 0%, #e8dfc8 100%); border: none; border-radius: 24px; padding: 12px 24px; font-weight: 500; letter-spacing: 1px; box-shadow: 0 2px 6px rgba(139, 115, 85, 0.15); transition: all 0.3s ease; height: 48px; color: #8b7355; min-width: 90px; font-size: 15px; margin-left: 0; display: flex; align-items: center; justify-content: center;"
-                        @click="triggerFileInput"
-                    >
-                        <i class="el-icon-folder-add" style="font-size: 26px; vertical-align: middle; display: flex; align-items: center; justify-content: center; width: 100%;"></i>
-                    </el-button>
-                    <input
-                        ref="fileInput"
-                        type="file"
-                        style="display: none;"
-                        @change="handleFileChange"
-                    />
-                    <span v-if="selectedFileName" style="color: #8b7355; font-size: 14px; margin-left: 4px; margin-right: 8px; max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: inline-block;">{{ selectedFileName }}</span>
-                    <el-button 
-                        type="primary" 
-                        style="background: linear-gradient(135deg, #8b7355 0%, #a0866b 100%);
-                               border: none;
-                               border-radius: 24px;
-                               padding: 12px 24px;
-                               font-weight: 500;
-                               letter-spacing: 1px;
-                               box-shadow: 0 2px 6px rgba(139, 115, 85, 0.3);
-                               transition: all 0.3s ease;
-                               height: 48px;"
-                        @click="sendMessage"
-                        :disabled="!inputMessage.trim()"
-                        class="send-button">
-                        <i class="el-icon-s-promotion" style="margin-right: 6px"></i>
-                        发送
-                    </el-button>
+
+                <!-- 右侧聊天区域 - 三层结构 -->
+                <div style="flex: 1; display: flex; flex-direction: column; height: 100%; min-width: 0;">
+                    <!-- 顶部文档选择区域 - 固定 -->
+                    <div v-if="availableDocuments.length" class="document-selection-area" style="flex-shrink: 0; margin-bottom: 15px; padding: 12px; background: #f8f6f2; border-radius: 8px; border: 1px solid #e8dfc8;">
+                        <div style="display: flex; align-items: center; gap: 10px;">
+                            <span style="color: #8b7355; font-weight: bold; font-size: 14px;">选择文档:</span>
+                            <el-select
+                                v-model="selectedDocumentId"
+                                placeholder="请选择文档"
+                                style="flex: 1; max-width: 300px;"
+                                size="small"
+                                @change="onDocumentSelectChange">
+                                <el-option
+                                    v-for="doc in availableDocuments"
+                                    :key="doc.id"
+                                    :label="doc.title"
+                                    :value="doc.id">
+                                    <span style="float: left">{{ doc.title }}</span>
+                                    <span style="float: right; color: #8492a6; font-size: 13px">{{ doc.file_type }}</span>
+                                </el-option>
+                            </el-select>
+                            <el-button
+                                v-if="selectedDocumentId"
+                                @click="deleteSelectedDocument"
+                                type="text"
+                                style="color: #f56c6c;"
+                                size="mini">
+                                <i class="el-icon-delete"></i>
+                            </el-button>
+                        </div>
+                    </div>
+
+                    <!-- 中间聊天消息区域 - 可滚动 -->
+                    <div class="message-list-container" style="flex: 1; overflow: hidden; background-color: rgba(255,255,255,0.5); border-radius: 12px; margin-bottom: 15px;">
+                        <div class="message-list" style="height: 100%; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 18px;">
+                            <div
+                                v-for="(message, index) in messages"
+                                :key="index"
+                                :class="['message-bubble', message.isUser ? 'user-message' : 'ai-message']">
+                                <div class="message-content" v-html="markdownToHtml(message.text)"></div>
+                                <div class="message-time">{{ formatTime(message.timestamp) }}</div>
+                            </div>
+                            <!-- AI处理中提示 -->
+                            <div v-if="isWaitingForAI" class="message-bubble ai-message">
+                                <div class="message-content">
+                                    <span class="ai-loading">
+                                        <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+                                    </span>
+                                    <span style="margin-left: 10px;">正在思考中...</span>
+                                </div>
+                                <div class="message-time">问泉</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 底部输入区域 - 固定 -->
+                    <div class="input-area-container" style="flex-shrink: 0;">
+                        <div class="input-area" style="display: flex; gap: 10px; align-items: flex-end; padding: 15px; background: rgba(255,255,255,0.8); border-radius: 12px; border: 1px solid rgba(139, 115, 85, 0.1);">
+                            <el-input
+                                type="textarea"
+                                :rows="1"
+                                placeholder="输入你的问题..."
+                                v-model="inputMessage"
+                                @keyup.enter.native="sendMessage"
+                                resize="none"
+                                style="flex: 1; border-radius: 24px;">
+                            </el-input>
+
+                            <!-- 文档管理按钮组 -->
+                            <div style="display: flex; gap: 8px;">
+                                <el-button
+                                    type="default"
+                                    style="background: linear-gradient(135deg, #f5f1e8 0%, #e8dfc8 100%); border: none; border-radius: 24px; padding: 12px; font-weight: 500; box-shadow: 0 2px 6px rgba(139, 115, 85, 0.15); transition: all 0.3s ease; height: 48px; color: #8b7355;"
+                                    @click="triggerFileInput"
+                                    title="上传文档">
+                                    <i class="el-icon-folder-add" style="font-size: 18px;"></i>
+                                </el-button>
+
+                                <el-button
+                                    type="primary"
+                                    style="background: linear-gradient(135deg, #8b7355 0%, #a0866b 100%);
+                                           border: none;
+                                           border-radius: 24px;
+                                           padding: 12px 24px;
+                                           font-weight: 500;
+                                           letter-spacing: 1px;
+                                           box-shadow: 0 2px 6px rgba(139, 115, 85, 0.3);
+                                           transition: all 0.3s ease;
+                                           height: 48px;"
+                                    @click="sendMessage"
+                                    :disabled="!inputMessage.trim()"
+                                    class="send-button">
+                                    <i class="el-icon-s-promotion" style="margin-right: 6px"></i>
+                                    发送
+                                </el-button>
+                            </div>
+                        </div>
+
+                        <!-- 文件上传状态提示 -->
+                        <div v-if="selectedFileName" style="margin-top: 8px; color: #8b7355; font-size: 14px; text-align: center;">
+                            <i class="el-icon-document"></i> {{ selectedFileName }}
+                        </div>
+                    </div>
                 </div>
             </div>
         </el-main>
+
+        <!-- 隐藏的文件输入 -->
+        <input
+            ref="fileInput"
+            type="file"
+            style="display: none;"
+            @change="handleFileChange"
+        />
     </el-container>
     </el-container>
 </template>
@@ -146,27 +263,9 @@
         color: white !important;
     }
     
-    .chat-container {
-        display: flex;
-        flex-direction: column;
-        height: 100%;
-        padding: 25px;
-        background-color: rgba(255,255,255,0.7);
-        border-radius: 16px;
-        box-shadow: 0 4px 20px rgba(0,0,0,0.08);
-        border: 1px solid rgba(139, 115, 85, 0.1);
-    }
-    
+    /* 移除旧的chat-container样式，使用新的布局 */
+
     .message-list {
-        flex: 1;
-        overflow-y: auto;
-        margin-bottom: 20px;
-        padding: 20px;
-        display: flex;
-        flex-direction: column;
-        gap: 18px;
-        background-color: rgba(255,255,255,0.5);
-        border-radius: 12px;
         scrollbar-width: thin;
         scrollbar-color: #8b7355 #f0e6d2;
     }
@@ -219,6 +318,159 @@
         margin-bottom: 5px;
         line-height: 1.6;
         font-size: 15px;
+    }
+
+    /* Markdown样式 */
+    .message-content h1 {
+        font-size: 1.8em;
+        font-weight: bold;
+        margin: 16px 0 12px 0;
+        color: #5a4a3a;
+        border-bottom: 2px solid #8b7355;
+        padding-bottom: 8px;
+    }
+
+    .message-content h2 {
+        font-size: 1.5em;
+        font-weight: bold;
+        margin: 14px 0 10px 0;
+        color: #5a4a3a;
+        border-bottom: 1px solid #d4c9a8;
+        padding-bottom: 6px;
+    }
+
+    .message-content h3 {
+        font-size: 1.3em;
+        font-weight: bold;
+        margin: 12px 0 8px 0;
+        color: #5a4a3a;
+    }
+
+    .message-content h4 {
+        font-size: 1.1em;
+        font-weight: bold;
+        margin: 10px 0 6px 0;
+        color: #5a4a3a;
+    }
+
+    .message-content h5, .message-content h6 {
+        font-size: 1em;
+        font-weight: bold;
+        margin: 8px 0 4px 0;
+        color: #5a4a3a;
+    }
+
+    .message-content p {
+        margin: 8px 0;
+        line-height: 1.6;
+    }
+
+    .message-content ul, .message-content ol {
+        margin: 8px 0;
+        padding-left: 24px;
+    }
+
+    .message-content li {
+        margin: 4px 0;
+        line-height: 1.5;
+    }
+
+    .message-content ul li {
+        list-style-type: disc;
+    }
+
+    .message-content ol li {
+        list-style-type: decimal;
+    }
+
+    .message-content strong, .message-content b {
+        font-weight: bold;
+        color: #5a4a3a;
+    }
+
+    .message-content em, .message-content i {
+        font-style: italic;
+    }
+
+    .message-content code {
+        background-color: #f5f1e8;
+        border: 1px solid #e8dfc8;
+        border-radius: 4px;
+        padding: 2px 6px;
+        font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+        font-size: 0.9em;
+        color: #8b7355;
+    }
+
+    .message-content pre {
+        background-color: #f8f6f2;
+        border: 1px solid #e8dfc8;
+        border-radius: 8px;
+        padding: 12px;
+        margin: 12px 0;
+        overflow-x: auto;
+        font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+        font-size: 0.9em;
+        line-height: 1.4;
+    }
+
+    .message-content pre code {
+        background: none;
+        border: none;
+        padding: 0;
+        font-size: inherit;
+        color: inherit;
+    }
+
+    .message-content blockquote {
+        border-left: 4px solid #8b7355;
+        margin: 12px 0;
+        padding: 8px 16px;
+        background-color: #f8f6f2;
+        border-radius: 0 8px 8px 0;
+        font-style: italic;
+        color: #6d5a47;
+    }
+
+    .message-content table {
+        border-collapse: collapse;
+        width: 100%;
+        margin: 12px 0;
+        border: 1px solid #e8dfc8;
+        border-radius: 8px;
+        overflow: hidden;
+    }
+
+    .message-content th, .message-content td {
+        border: 1px solid #e8dfc8;
+        padding: 8px 12px;
+        text-align: left;
+    }
+
+    .message-content th {
+        background-color: #f5f1e8;
+        font-weight: bold;
+        color: #5a4a3a;
+    }
+
+    .message-content tr:nth-child(even) {
+        background-color: #faf9f6;
+    }
+
+    .message-content hr {
+        border: none;
+        border-top: 2px solid #e8dfc8;
+        margin: 16px 0;
+    }
+
+    .message-content a {
+        color: #8b7355;
+        text-decoration: underline;
+    }
+
+    .message-content a:hover {
+        color: #6d5a47;
+        text-decoration: none;
     }
     
     .message-time {
@@ -280,6 +532,214 @@
       0%, 80%, 100% { transform: scale(0.7); opacity: 0.5; }
       40% { transform: scale(1.2); opacity: 1; }
     }
+
+    /* 侧边栏面板样式 */
+    .sidebar-panel {
+        height: 100%;
+        background: white;
+        border-radius: 12px;
+        box-shadow: 0 2px 12px rgba(0,0,0,0.05);
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+    }
+
+    .panel-header {
+        padding: 16px 20px;
+        border-bottom: 1px solid #f0f0f0;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        background: linear-gradient(135deg, #f8f6f2 0%, #f5f1e8 100%);
+    }
+
+    .header-title {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-weight: 600;
+        color: #5a4a3a;
+        font-size: 15px;
+    }
+
+    .header-title i {
+        color: #8b7355;
+        font-size: 16px;
+    }
+
+
+
+    .header-actions {
+        display: flex;
+        gap: 4px;
+    }
+
+    .action-btn {
+        padding: 6px !important;
+        color: #8b7355 !important;
+        border-radius: 6px !important;
+        transition: all 0.3s ease !important;
+    }
+
+    .action-btn:hover {
+        background: rgba(139, 115, 85, 0.1) !important;
+        color: #6d5a47 !important;
+    }
+
+    .action-btn.danger {
+        color: #f56c6c !important;
+    }
+
+    .action-btn.danger:hover {
+        background: rgba(245, 108, 108, 0.1) !important;
+        color: #e6393f !important;
+    }
+
+    .panel-content {
+        flex: 1;
+        padding: 16px;
+        overflow-y: auto;
+        scrollbar-width: thin;
+        scrollbar-color: #d4c5a9 transparent;
+    }
+
+    .panel-content::-webkit-scrollbar {
+        width: 4px;
+    }
+
+    .panel-content::-webkit-scrollbar-thumb {
+        background-color: #d4c5a9;
+        border-radius: 2px;
+    }
+
+    .panel-content::-webkit-scrollbar-track {
+        background: transparent;
+    }
+
+    /* 聊天历史样式 */
+    .history-list {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+    }
+
+    .history-item {
+        padding: 12px;
+        border-radius: 8px;
+        background: #f8f6f2;
+        border: 1px solid #e8dfc8;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        display: flex;
+        align-items: flex-start;
+        gap: 8px;
+        position: relative;
+    }
+
+    .history-item:hover {
+        background: #f0ede6;
+        border-color: #d4c5a9;
+        transform: translateY(-1px);
+        box-shadow: 0 2px 8px rgba(139, 115, 85, 0.1);
+    }
+
+    .history-item:hover .history-actions {
+        opacity: 1;
+    }
+
+    .history-item.active {
+        background: #e8dfc8;
+        border-color: #8b7355;
+        box-shadow: 0 2px 8px rgba(139, 115, 85, 0.2);
+    }
+
+    .history-content {
+        flex: 1;
+        min-width: 0;
+    }
+
+    .history-preview {
+        font-size: 14px;
+        color: #5a4a3a;
+        line-height: 1.4;
+        margin-bottom: 6px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-weight: 500;
+    }
+
+
+
+    .history-actions {
+        opacity: 0;
+        transition: opacity 0.3s ease;
+    }
+
+    .delete-session-btn {
+        padding: 4px !important;
+        color: #f56c6c !important;
+        border-radius: 4px !important;
+    }
+
+    .delete-session-btn:hover {
+        background: rgba(245, 108, 108, 0.1) !important;
+    }
+
+
+
+    /* 空状态样式 */
+    .empty-state {
+        text-align: center;
+        padding: 40px 20px;
+        color: #8b7355;
+    }
+
+    .empty-state i {
+        font-size: 48px;
+        margin-bottom: 16px;
+        opacity: 0.5;
+    }
+
+    .empty-state p {
+        margin: 0 0 16px 0;
+        font-size: 14px;
+        color: #999;
+    }
+
+    .start-chat-btn, .upload-btn {
+        color: #8b7355 !important;
+        font-weight: 500 !important;
+    }
+
+    .start-chat-btn:hover, .upload-btn:hover {
+        color: #6d5a47 !important;
+    }
+
+    /* 响应式布局调整 */
+    @media (max-width: 1200px) {
+        .el-col-5 {
+            display: none !important;
+        }
+
+        .el-col-19 {
+            width: 100% !important;
+            flex: 0 0 100% !important;
+            max-width: 100% !important;
+        }
+    }
+
+    @media (max-width: 768px) {
+        .input-area {
+            flex-direction: column !important;
+            gap: 10px !important;
+        }
+
+        .input-area > div {
+            width: 100% !important;
+            justify-content: center !important;
+        }
+    }
 </style>
 
 <script>
@@ -310,24 +770,44 @@ hljs.registerLanguage('bash', bash);
 export default {
     data() {
         return {
-            url: this.HOST + '/chat/',
+            // 消息相关
             inputMessage: '',
             messages: [],
-            form: {
-                message: '',
-                timestamp: ''
-            },
             isWaitingForAI: false,
+
+            // 会话相关
             currentSessionId: null,
-            pollingTimer: null,
+            currentConversationId: null,
+            chatHistory: [],
+
+            // 文档相关
             selectedFile: null,
-            selectedFileName: '', // 新增：存储选中文件名
-            currentDocumentId: null, // 当前文档ID
+            selectedFileName: '',
+            availableDocuments: [],
+            selectedDocumentId: null,
 
-
-            isLoading: false, // 加载状态
+            // 状态相关
+            pollingTimer: null,
+            isLoading: false,
             username: '',
             userInitial: '',
+
+            // API相关
+            form: {
+                message: '',
+                timestamp: null,
+                document_id: null,
+                conversation_id: null,
+                username: ''
+            }
+        }
+    },
+    computed: {
+        HOST() {
+            return 'http://localhost:8000/api';
+        },
+        url() {
+            return `${this.HOST}/chat/`;
         }
     },
     created() {
@@ -338,11 +818,8 @@ export default {
         // 触发Vuex action来更新store中的用户信息
         this.$store.dispatch('restoreUserInfo', parsedUserInfo);
 
-        // 页面加载时从store恢复历史
-        const history = this.$store.getters.getChatHistory;
-        if (history && Array.isArray(history) && history.length > 0) {
-            this.messages = history.map(msg => ({...msg, timestamp: new Date(msg.timestamp)}));
-        }
+        // 不再从store恢复历史，而是从服务器获取最新的历史记录
+        // 这样可以确保清空历史后不会重新显示旧的历史记录
 
         // 获取当前用户信息
         const user = this.$store.getters.getUserInfo;
@@ -354,6 +831,13 @@ export default {
             this.userInitial = '?';
         }
 
+        // 获取可用文档列表
+        this.loadAvailableDocuments();
+
+        // 获取聊天历史
+        this.loadChatHistory();
+
+        
         //从localStorage恢复当前项目信息，仅同步id和name到store
         const currentProjectStr = localStorage.getItem('currentProject');
         //let projectId = null;
@@ -386,9 +870,7 @@ export default {
         // 组件销毁前清理轮询
         this.stopPolling();
     },
-    computed: {
-        // 删除了动画相关的computed属性
-    },
+
     watch: {
         messages: {
             handler(newVal) {
@@ -402,6 +884,23 @@ export default {
         }
     },
     methods: {
+        // 统一的API调用方法
+        async apiCall(method, url, data = null, config = {}) {
+            try {
+                const response = await axios[method](url, data, config);
+                return response;
+            } catch (error) {
+                console.error(`API调用失败 [${method.toUpperCase()}] ${url}:`, error);
+                throw error;
+            }
+        },
+
+        // 获取当前用户名
+        getCurrentUsername() {
+            const user = this.$store.getters.getUserInfo;
+            return user && user.username ? user.username : '未登录';
+        },
+
         markdownToHtml(message) {
             if (!message) return '';
             const marked = new Marked(
@@ -424,17 +923,22 @@ export default {
             );
             return marked.parse(message);
         },
-        sendMessage() {
+        async sendMessage() {
             if (this.inputMessage.trim() === '') return;
 
-            this.form.message = this.inputMessage;
-            this.form.timestamp = new Date();
+            // 准备发送数据
+            const sendData = {
+                message: this.inputMessage,
+                username: this.getCurrentUsername(),
+                conversation_id: this.currentConversationId,
+                document_id: this.selectedDocumentId || null
+            };
 
-            // 添加用户消息
+            // 添加用户消息到界面
             const userMsg = {
                 text: this.inputMessage,
                 isUser: true,
-                timestamp: this.form.timestamp
+                timestamp: new Date()
             };
             this.messages.push(userMsg);
 
@@ -444,6 +948,7 @@ export default {
                 timestamp: userMsg.timestamp.toISOString()
             });
 
+            // 清空输入框并滚动到底部
             this.inputMessage = '';
             this.$nextTick(() => {
                 const container = document.querySelector('.message-list');
@@ -453,24 +958,47 @@ export default {
             // 显示等待状态
             this.isWaitingForAI = true;
 
-            // 发送消息到后端API
-            axios.post(this.url, this.form).then((response) => {
+            try {
+                // 发送消息到后端API（同步处理）
+                const response = await axios.post(this.url, sendData);
                 console.log('消息发送成功:', response.data);
 
-                if (response.data.session_id) {
-                    this.currentSessionId = response.data.session_id;
-                    // 开始轮询检查状态
-                    this.startPolling();
-                } else {
-                    this.isWaitingForAI = false;
-                    this.$message.error('未获取到会话ID');
+                // 保存会话信息
+                if (response.data.conversation_id) {
+                    this.currentConversationId = response.data.conversation_id;
                 }
-            })
-            .catch(error => {
-                console.error('发送失败:', error);
-                this.$message.error('发送失败：' + error.message);
+
+                // 直接添加AI回复（不需要轮询）
+                if (response.data.ai_response) {
+                    const aiMsg = {
+                        text: response.data.ai_response,
+                        isUser: false,
+                        timestamp: new Date()
+                    };
+                    this.messages.push(aiMsg);
+
+                    // 同步到store
+                    this.$store.dispatch('addChatMessage', {
+                        ...aiMsg,
+                        timestamp: aiMsg.timestamp.toISOString()
+                    });
+
+                    this.$nextTick(() => {
+                        const container = document.querySelector('.message-list');
+                        if (container) container.scrollTop = container.scrollHeight;
+                    });
+                }
+
+                // 重新加载聊天历史（确保新对话出现在历史列表中）
+                this.loadChatHistory();
+
                 this.isWaitingForAI = false;
-            });
+
+            } catch (error) {
+                console.error('发送失败:', error);
+                this.$message.error('发送失败：' + (error.response?.data?.error || error.message));
+                this.isWaitingForAI = false;
+            }
         },
         startPolling() {
             if (this.pollingTimer) {
@@ -596,6 +1124,9 @@ export default {
                     });
 
                     this.$message.success(`文档 "${response.data.filename}" 上传成功！`);
+
+                    // 重新加载文档列表
+                    this.loadAvailableDocuments();
                 } else {
                     throw new Error('文档上传失败');
                 }
@@ -619,6 +1150,329 @@ export default {
             } finally {
                 this.isLoading = false;
             }
+        },
+
+        // 新增：加载可用文档列表
+        async loadAvailableDocuments() {
+            try {
+                const response = await this.apiCall('get', `${this.HOST}/chat/documents/`);
+                if (response.data && response.data.documents) {
+                    this.availableDocuments = response.data.documents;
+                    console.log('加载文档列表成功:', this.availableDocuments);
+                }
+            } catch (error) {
+                this.$message.error('加载文档列表失败: ' + (error.response?.data?.error || error.message));
+            }
+        },
+
+        // 新增：删除选中的文档
+        deleteSelectedDocument() {
+            if (!this.selectedDocumentId) return;
+
+            const selectedDoc = this.availableDocuments.find(doc => doc.id === this.selectedDocumentId);
+            if (!selectedDoc) return;
+
+            this.$confirm(`确定要删除文档"${selectedDoc.title}"吗？此操作不可恢复！`, '警告', {
+                confirmButtonText: '确定',
+                cancelButtonText: '取消',
+                type: 'warning'
+            }).then(async () => {
+                try {
+                    const response = await this.apiCall('delete', `${this.HOST}/chat/documents/${selectedDoc.id}/delete/`);
+
+                    if (response.status === 200) {
+                        this.$message.success(`文档 "${selectedDoc.title}" 删除成功`);
+
+                        // 清空选择
+                        this.selectedDocumentId = null;
+
+                        // 重新加载文档列表
+                        await this.loadAvailableDocuments();
+                    }
+                } catch (error) {
+                    console.error('删除文档失败:', error);
+                    this.$message.error(`删除失败: ${error.response?.data?.error || error.message}`);
+                }
+            }).catch(() => {
+                this.$message.info('已取消删除');
+            });
+        },
+
+
+
+        // 新增：文档下拉选择变化
+        onDocumentSelectChange(documentId) {
+            const selectedDoc = this.availableDocuments.find(doc => doc.id === documentId);
+            if (selectedDoc) {
+                console.log('选择文档:', selectedDoc.title, 'ID:', documentId);
+            }
+        },
+
+        // 新增：格式化文件大小
+        formatFileSize(bytes) {
+            if (!bytes) return '0 B';
+            const k = 1024;
+            const sizes = ['B', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        },
+
+        // 新增：加载聊天历史
+        async loadChatHistory() {
+            try {
+                const username = this.getCurrentUsername();
+                const url = `${this.HOST}/chat/conversations/?username=${encodeURIComponent(username)}`;
+                console.log('加载聊天历史 - 用户:', username, '- URL:', url);
+
+                const response = await fetch(url);
+
+                if (response.ok) {
+                    const data = await response.json();
+                    console.log('服务器返回的对话数据:', data);
+
+                    if (data && data.conversations) {
+                        // 过滤掉没有消息的空对话
+                        const validConversations = data.conversations.filter(conv =>
+                            conv.message_count > 0 && conv.title !== '新对话'
+                        );
+
+                        console.log('过滤后的有效对话数:', validConversations.length);
+
+                        this.chatHistory = validConversations.map(conv => ({
+                            id: conv.id,
+                            user_message: conv.title,
+                            timestamp: new Date(conv.updated_at),
+                            messages: [],
+                            message_count: conv.message_count
+                        }));
+                        return;
+                    }
+                }
+                console.log('没有获取到有效的对话数据，清空历史');
+                this.chatHistory = [];
+            } catch (error) {
+                console.error('加载聊天历史失败:', error);
+                this.chatHistory = [];
+            }
+        },
+
+        // 新增：分组聊天历史
+        groupChatHistory(messages) {
+            const sessions = [];
+            let currentSession = null;
+
+            messages.forEach(msg => {
+                if (msg.isUser) {
+                    // 用户消息开始新的会话
+                    currentSession = {
+                        id: Date.now() + Math.random(),
+                        user_message: msg.text,
+                        timestamp: new Date(msg.timestamp),
+                        messages: [msg]
+                    };
+                    sessions.push(currentSession);
+                } else if (currentSession) {
+                    // AI回复添加到当前会话
+                    currentSession.messages.push(msg);
+                }
+            });
+
+            return sessions.reverse(); // 最新的在前面
+        },
+
+        // 新增：加载聊天会话
+        async loadChatSession(session) {
+            try {
+                const response = await this.apiCall('get', `${this.HOST}/chat/conversations/${session.id}/`);
+
+                if (response.data && response.data.messages) {
+                    this.messages = response.data.messages.map(msg => ({
+                        text: msg.content,
+                        isUser: msg.is_user,
+                        timestamp: new Date(msg.created_at),
+                        documentId: msg.document_id,
+                        documentTitle: msg.document_title
+                    }));
+
+                    this.currentConversationId = session.id;
+
+                    this.$nextTick(() => {
+                        const container = document.querySelector('.message-list');
+                        if (container) container.scrollTop = container.scrollHeight;
+                    });
+                }
+            } catch (error) {
+                this.$message.error('加载对话失败');
+                if (session.messages && session.messages.length > 0) {
+                    this.messages = session.messages.map(msg => ({
+                        ...msg,
+                        timestamp: new Date(msg.timestamp)
+                    }));
+                    this.currentSessionId = session.id;
+                }
+            }
+        },
+
+        // 新增：清空聊天历史
+        async clearChatHistory() {
+            const username = this.getCurrentUsername();
+            console.log('准备清空用户历史:', username);
+
+            this.$confirm('确定要清空所有聊天历史吗？此操作不可恢复！', '警告', {
+                confirmButtonText: '确定',
+                cancelButtonText: '取消',
+                type: 'warning'
+            }).then(async () => {
+                try {
+                    console.log('发送清空请求...');
+                    const response = await axios.delete(`${this.HOST}/chat/conversations/clear/`, {
+                        data: {
+                            username: username
+                        }
+                    });
+
+                    console.log('清空响应:', response.data);
+
+                    if (response.status === 200) {
+                        // 清空前端显示
+                        this.chatHistory = [];
+                        this.messages = [];
+                        this.currentConversationId = null;
+                        this.currentSessionId = null;
+
+                        // 清空store中的历史记录（这会同时清空localStorage）
+                        this.$store.dispatch('clearChatHistory');
+
+                        // 清空localStorage中的其他相关数据
+                        localStorage.removeItem('currentConversation');
+                        localStorage.removeItem('currentSession');
+
+                        // 立即重新加载历史记录以确保同步
+                        await this.loadChatHistory();
+
+                        console.log('清空后重新加载历史，当前历史数量:', this.chatHistory.length);
+
+                        if (response.data.deleted_count > 0) {
+                            this.$message.success(`聊天历史已清空，共删除 ${response.data.deleted_count} 个记录`);
+                        } else {
+                            this.$message.info('没有找到需要清空的历史记录');
+                        }
+                    }
+                } catch (error) {
+                    console.error('清空聊天历史失败:', error);
+                    this.$message.error('清空失败: ' + (error.response?.data?.error || error.message));
+                }
+            }).catch(() => {
+                this.$message.info('已取消清空');
+            });
+        },
+
+        // 新增：获取会话标题（取第一个问题的前30个字符）
+        getSessionTitle(session) {
+            if (session.user_message && session.user_message.trim()) {
+                const title = session.user_message.trim();
+                return title.length > 30 ? title.substring(0, 30) + '...' : title;
+            }
+            return '新对话';
+        },
+
+        // 新增：格式化历史时间
+        formatHistoryTime(timestamp) {
+            const date = new Date(timestamp);
+            const now = new Date();
+            const diff = now - date;
+
+            if (diff < 60000) { // 1分钟内
+                return '刚刚';
+            } else if (diff < 3600000) { // 1小时内
+                return Math.floor(diff / 60000) + '分钟前';
+            } else if (diff < 86400000) { // 1天内
+                return Math.floor(diff / 3600000) + '小时前';
+            } else {
+                return date.toLocaleDateString();
+            }
+        },
+
+        // 新增：开始新对话
+        startNewChat() {
+            // 清空当前聊天状态，开始新对话
+            this.messages = [];
+            this.currentSessionId = null;
+            this.currentConversationId = null;
+            this.selectedDocumentId = null;
+
+            // 清空store中的当前对话历史（但不清空localStorage中的历史记录）
+            this.$store.dispatch('updateChatHistory', []);
+
+            // 清空localStorage中的当前对话相关数据
+            localStorage.removeItem('currentConversation');
+            localStorage.removeItem('currentSession');
+
+            this.$message.success('已开始新对话');
+        },
+
+        // 新增：删除会话
+        deleteSession(session) {
+            this.$confirm(`确定要删除这个对话吗？`, '确认删除', {
+                confirmButtonText: '确定',
+                cancelButtonText: '取消',
+                type: 'warning'
+            }).then(async () => {
+                try {
+                    // 修复URL路径，HOST已经包含/api
+                    const url = `${this.HOST}/chat/conversations/${session.id}/`;
+                    const response = await fetch(url, { method: 'DELETE' });
+
+                    if (response.ok) {
+                        this.chatHistory = this.chatHistory.filter(s => s.id !== session.id);
+                        if (this.currentConversationId === session.id) {
+                            this.messages = [];
+                            this.currentConversationId = null;
+                        }
+                        this.$message.success('对话已删除');
+                        // 重新加载聊天历史以确保同步
+                        await this.loadChatHistory();
+                    } else {
+                        const errorData = await response.json().catch(() => ({}));
+                        this.$message.error(`删除失败: ${errorData.error || '未知错误'}`);
+                    }
+                } catch (error) {
+                    console.error('删除会话失败:', error);
+                    this.$message.error('删除失败');
+                }
+            }).catch(() => {
+                this.$message.info('已取消删除');
+            });
+        },
+
+        // 新增：删除文档（优化版）
+        deleteDocument(doc) {
+            this.$confirm(`确定要删除文档"${doc.title}"吗？此操作不可恢复！`, '警告', {
+                confirmButtonText: '确定',
+                cancelButtonText: '取消',
+                type: 'warning'
+            }).then(async () => {
+                try {
+                    const response = await this.apiCall('delete', `${this.HOST}/chat/documents/${doc.id}/delete/`);
+
+                    if (response.status === 200) {
+                        this.$message.success(`文档 "${doc.title}" 删除成功`);
+
+                        // 如果删除的是当前选中的文档，清空选择
+                        if (this.selectedDocumentId === doc.id) {
+                            this.selectedDocumentId = null;
+                        }
+
+                        // 重新加载文档列表
+                        await this.loadAvailableDocuments();
+                    }
+                } catch (error) {
+                    console.error('删除文档失败:', error);
+                    this.$message.error(`删除失败: ${error.response?.data?.error || error.message}`);
+                }
+            }).catch(() => {
+                this.$message.info('已取消删除');
+            });
         }
     }
 };

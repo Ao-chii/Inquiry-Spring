@@ -351,8 +351,9 @@ class TestGenerationView(View):
                 # 简答题不需要选项
                 options = []
 
-            # 获取正确答案
-            correct_answer = q.get('correct_answer', '')
+            # 获取并处理正确答案 - 解决多选题列表问题
+            raw_correct_answer = q.get('correct_answer', '')
+            correct_answer = self._process_correct_answer(raw_correct_answer, question_type)
 
             # 基于ai_services的实际输出格式进行转换
             explanation = q.get('explanation', '')
@@ -378,6 +379,45 @@ class TestGenerationView(View):
                 logger.warning(f"跳过无效题目: {q}")
 
         return formatted_questions
+
+    def _process_correct_answer(self, raw_answer, question_type):
+        """处理正确答案，解决多选题列表问题"""
+        try:
+            # 如果是列表格式（多选题的情况）
+            if isinstance(raw_answer, list):
+                if question_type == 'MCM':
+                    # 多选题：返回列表格式，前端期望数组
+                    return raw_answer
+                else:
+                    # 单选题：取第一个元素
+                    return raw_answer[0] if raw_answer else ''
+
+            # 如果是字符串格式
+            elif isinstance(raw_answer, str):
+                # 尝试解析JSON格式的字符串（可能是已经存储的多选题答案）
+                if raw_answer.startswith('[') and raw_answer.endswith(']'):
+                    try:
+                        import json
+                        parsed_answer = json.loads(raw_answer)
+                        if question_type == 'MCM':
+                            return parsed_answer
+                        else:
+                            return parsed_answer[0] if parsed_answer else ''
+                    except json.JSONDecodeError:
+                        # 解析失败，当作普通字符串处理
+                        return raw_answer
+                else:
+                    # 普通字符串
+                    return raw_answer
+
+            # 其他类型，转换为字符串
+            else:
+                return str(raw_answer) if raw_answer is not None else ''
+
+        except Exception as e:
+            logger.warning(f"处理正确答案时出错: {e}, 原始答案: {raw_answer}")
+            # 出错时返回原始值的字符串形式
+            return str(raw_answer) if raw_answer is not None else ''
 
     def _extract_document_content(self, document):
         """提取文档内容"""

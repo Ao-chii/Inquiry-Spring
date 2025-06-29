@@ -230,5 +230,4 @@ AI_SERVICES = {
         'is_default': True
     },
     'GOOGLE_API_KEY': os.getenv('GOOGLE_API_KEY', ''),
-    'GEMINI_OFFLINE_MODE': os.getenv('GEMINI_OFFLINE_MODE', 'False').lower() in ('true', '1', 'yes'),
 }

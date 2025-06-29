@@ -60,11 +60,15 @@ class PromptManager:
             # 动态处理 RAG 和对话历史的占位符
             if '$reference_text_section' in template_content:
                 if variables.get('reference_text'):
-                    # 简化了知识来源的逻辑，统一使用"参考资料"作为标题
-                    variables['reference_text_section'] = f"参考资料:\n{variables['reference_text']}"
+                    # 获取知识来源标识，如果存在
+                    knowledge_source = variables.get('knowledge_source', '参考资料')
+                    # 根据知识来源类型设置不同的标题
+                    variables['reference_text_section'] = f"{knowledge_source}:\n{variables['reference_text']}"
+
                     variables['reference_instruction'] = "请严格根据上面提供的参考资料来回答问题。"
                 else:
                     variables['reference_text_section'] = ""
+                    variables['reference_instruction'] = "基于你的知识提供最准确的回答。不要显示任何来源标识或索引标记。"
             
             if '$conversation_history_section' in template_content:
                 if variables.get('conversation_history'):
@@ -253,7 +257,8 @@ class PromptManager:
             }]
         elif example_type == 'chat':
             examples = [{
-                "answer": "根据参考资料，二氧化碳是一种无色无味的气体，是地球温室效应的主要贡献者之一。在常温常压下，二氧化碳以气态存在，分子式为CO₂。工业上，它被广泛用于饮料碳酸化、灭火器和制冷（干冰）等领域。"
+                "answer": "二氧化碳是一种无色无味的气体，是地球温室效应的主要贡献者之一。在常温常压下，二氧化碳以气态存在，分子式为CO₂。工业上，它被广泛用于饮料碳酸化、灭火器和制冷（干冰）等领域。",
+                "sources": []
             }]
         elif example_type == 'summary':
             examples = [{
@@ -306,17 +311,22 @@ AI技术已渗透到众多行业，展现出巨大的商业价值。在**医疗�
 
                             用户问题: $query
 
-                            回答要求:
-                            1. $reference_instruction
-                            2. 不要编造不在参考资料中的信息。如果参考资料不足以回答问题，请明确说明。
-                            
+                            **严格要求**:
+                            1. **绝对禁止**在回答中使用任何形式的索引标记，包括但不限于：[1]、[2]、[3]、(1)、(2)、①、②等。
+                            2. **绝对禁止**添加任何引用标记、来源标识或参考文献标记。
+                            3. **必须**直接回答问题，不使用"根据资料"、"文档显示"等表述。
+                            4. $reference_instruction
+                            5. 不要编造不在参考资料中的信息。如果参考资料不足以回答问题，请明确说明。
+                            6. 使用清晰的markdown格式回答，适当使用**粗体**强调重点，使用列表组织信息。
+                            7. 确保回答结构清晰，便于阅读。
+
                             $json_schema_section
-                            
+
                             $examples_section
 
                             请开始你的回答:""",
-                'variables': ['query', 'reference_text', 'conversation_history', 'output_schema', 'examples'],
-                'version': '5.2'
+                'variables': ['query', 'reference_text', 'conversation_history', 'output_schema', 'examples', 'knowledge_source'],
+                'version': '5.5'
             },
             'quiz': {
                 'name': '统一测验生成',
@@ -349,23 +359,23 @@ AI技术已渗透到众多行业，展现出巨大的商业价值。在**医疗�
                             文档内容:
                             $content
 
-                            要求:
-                            1.  **使用Markdown语法**进行格式化，以增强可读性。
-                            2.  根据文档大小和内容结构进行排版，比如考虑包含以下部分：
+                            **严格要求**:
+                            1.  **绝对禁止**在摘要中使用任何形式的索引标记，包括但不限于：[1]、[2]、[3]、(1)、(2)、①、②等。
+                            2.  **绝对禁止**添加任何引用标记、来源标识或参考文献标记。
+                            3.  **必须**直接陈述事实，不使用"根据文档"、"文档显示"等表述。
+                            4.  **使用Markdown语法**进行格式化，以增强可读性。
+                            5.  根据文档大小和内容结构进行排版，比如考虑包含以下部分：
                                 *   一个一级标题 (`#`)，作为整个文档的总结性标题。
                                 *   一段引言，简要介绍文档的核心主题。
                                 *   至少两个二级标题 (`##`) 的核心章节，深入阐述关键内容。
                                 *   一个名为"**核心要点**"的章节，使用无序列表 (`-`) 总结出3-5个最重要的结论或要点。
-                            3.  在适当的地方使用粗体 (`**text**`) 来强调关键词。
-                            4.  保持客观，不添加原文中没有的信息。
+                            6.  在适当的地方使用粗体 (`**text**`) 来强调关键词。
+                            7.  保持客观，不添加原文中没有的信息。
+                            8.  **直接返回Markdown格式的摘要文本**，不要包装在JSON中。
 
-                            $json_schema_section
-                            
-                            $examples_section
-
-                            请开始生成你的Markdown摘要:""",
-                'variables': ['content', 'output_schema', 'examples'],
-                'version': '5.0'
+                            请开始生成你的Markdown格式摘要:""",
+                'variables': ['content'],
+                'version': '5.3'
             }
         }
         

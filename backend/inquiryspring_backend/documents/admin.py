@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Document, DocumentChunk, UploadedFile
+from .models import Document, DocumentChunk
 
 
 @admin.register(Document)
@@ -39,9 +39,4 @@ class DocumentChunkAdmin(admin.ModelAdmin):
     content_preview.short_description = '内容预览'
 
 
-@admin.register(UploadedFile)
-class UploadedFileAdmin(admin.ModelAdmin):
-    list_display = ['id', 'filename', 'file_size', 'upload_time']
-    list_filter = ['upload_time']
-    search_fields = ['filename', 'file_path']
-    readonly_fields = ['upload_time']
+# 删除了UploadedFileAdmin - 现在统一使用Document模型

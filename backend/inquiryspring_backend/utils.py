@@ -128,9 +128,6 @@ def get_ai_service_status() -> Dict[str, Any]:
         # 检查API密钥配置
         api_key_configured = bool(os.environ.get('GOOGLE_API_KEY'))
 
-        # 检查离线模式
-        offline_mode = os.environ.get("GEMINI_OFFLINE_MODE", "").lower() in ("true", "1", "yes")
-
         # 尝试创建LLM客户端来验证服务状态
         try:
             client = LLMClientFactory.create_client()
@@ -139,18 +136,17 @@ def get_ai_service_status() -> Dict[str, Any]:
             service_available = False
 
         return {
-            'status': 'ready' if api_key_configured and service_available and not offline_mode else 'limited',
+            'status': 'ready' if api_key_configured and service_available else 'error',
             'api_key_configured': api_key_configured,
-            'offline_mode': offline_mode,
             'service_available': service_available,
-            'services_available': ['chat', 'quiz', 'summary']
+            'services_available': ['chat', 'quiz', 'summary'] if service_available else []
         }
     except Exception as e:
         return {
             'status': 'error',
             'error': str(e),
             'api_key_configured': False,
-            'offline_mode': True
+            'service_available': False
         }
 
 

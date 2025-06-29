@@ -36,28 +36,30 @@ def main():
         
         # 检查AI服务
         try:
-            from inquiryspring_backend.ai_services.llm_client import LLMClient
-            llm_client = LLMClient()
+            from inquiryspring_backend.ai_services.llm_client import LLMClientFactory
+            import os
 
             # 检查API密钥配置
-            import os
             api_key = os.getenv('GOOGLE_API_KEY')
             if api_key:
                 print("🤖 AI服务状态: 已配置")
                 print("✅ Google API密钥已设置")
 
-                # 尝试测试连接
+                # 尝试创建LLM客户端并测试连接
                 try:
-                    test_response = llm_client.generate_response("测试连接", max_tokens=10)
-                    if test_response:
+                    llm_client = LLMClientFactory.create_client()
+                    test_response = llm_client.generate_text("测试连接", max_tokens=10)
+                    if test_response and test_response.get('text'):
                         print("✅ AI服务连接正常")
+                        print(f"✅ 测试响应: {test_response.get('text', '')[:50]}...")
                     else:
                         print("⚠️  AI服务连接可能有问题")
                 except Exception as test_e:
                     print(f"⚠️  AI服务测试失败: {test_e}")
             else:
-                print("🤖 AI服务状态: 未配置")
+                print("❌ AI服务状态: 未配置")
                 print("💡 提示: 在.env文件中设置GOOGLE_API_KEY以启用AI功能")
+                print("⚠️  警告: 没有API密钥，AI功能将不可用")
 
         except Exception as e:
             print(f"⚠️  AI服务检查失败: {e}")

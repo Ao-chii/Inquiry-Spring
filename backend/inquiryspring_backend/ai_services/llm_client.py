@@ -41,12 +41,12 @@ class LLMClientFactory:
                 try:
                     model_config = AIModel.objects.get(is_active=True, is_default=True)
                 except AIModel.DoesNotExist:
-                    logger.warning("找不到默认AI模型配置，使用内置Gemini客户端")
-                    return GeminiClient(None)
+                    logger.error("找不到默认AI模型配置")
+                    raise ValueError("找不到默认AI模型配置。请确保已正确配置AI模型并设置API密钥。")
                 except Exception as e:
                     if 'no such table' in str(e).lower():
-                        logger.warning("AI模型表不存在，使用内置Gemini客户端")
-                        return GeminiClient(None)
+                        logger.error("AI模型表不存在，请先运行数据库迁移")
+                        raise ValueError("AI服务未正确初始化，请先运行数据库迁移")
                     raise
                 
             # 根据提供商创建对应的客户端
@@ -59,16 +59,14 @@ class LLMClientFactory:
                 return GeminiClient(None)
                 
         except AIModel.DoesNotExist:
-            logger.warning(f"找不到可用的模型配置. model_id={model_id}, provider={provider}，使用内置Gemini客户端")
-            # 创建一个默认的Gemini客户端作为后备方案
-            return GeminiClient(None)
+            logger.error(f"找不到可用的模型配置. model_id={model_id}, provider={provider}")
+            raise ValueError(f"找不到可用的AI模型配置。请确保已正确配置AI模型并设置API密钥。")
         except Exception as e:
             if 'no such table' in str(e).lower():
-                logger.warning("AI模型表不存在，使用内置Gemini客户端")
-                return GeminiClient(None)
+                logger.error("AI模型表不存在，请先运行数据库迁移")
+                raise ValueError("AI服务未正确初始化，请先运行数据库迁移")
             logger.exception(f"创建LLM客户端失败: {str(e)}")
-            # 出错时也返回默认客户端，而不是抛出异常
-            return GeminiClient(None)
+            raise
 
 
 class BaseLLMClient:
@@ -154,24 +152,14 @@ class GeminiClient(BaseLLMClient):
             api_key = None
             
         if not api_key:
-            logger.warning("未提供有效的Gemini API密钥 (既不在模型配置中，也不在GOOGLE_API_KEY环境变量中)，将使用模拟响应")
-            self.genai = None
-            self.offline_mode = True
-            return
-            
-        self.offline_mode = os.environ.get("GEMINI_OFFLINE_MODE", "").lower() in ("true", "1", "yes")
-        if self.offline_mode:
-            logger.warning("Gemini客户端运行在离线模式，将返回模拟响应")
-            self.genai = None
-            return
-            
+            raise ValueError("未提供有效的Gemini API密钥。请在模型配置中设置api_key或在环境变量中设置GOOGLE_API_KEY")
+
         try:
             genai.configure(api_key=api_key)
             self.genai = genai
         except Exception as e:
-            logger.error(f"配置Gemini API失败: {str(e)}，将使用模拟响应")
-            self.genai = None
-            self.offline_mode = True
+            logger.error(f"配置Gemini API失败: {str(e)}")
+            raise ValueError(f"Gemini API配置失败: {str(e)}")
         
         if self.model_config and self.model_config.model_id:
             self.model_id = self.model_config.model_id
@@ -200,17 +188,13 @@ class GeminiClient(BaseLLMClient):
     
     def count_tokens(self, text: str) -> int:
         """使用 Gemini API 准确计算文本的 token 数量
-        
+
         Args:
             text: 要计算的文本
-            
+
         Returns:
             token 数量
         """
-        if not self.genai:
-            # 如果没有API访问，回退到估算方法
-            return self._estimate_tokens(text)
-            
         try:
             # 使用模型的 countTokens 方法准确计算
             model = self.genai.GenerativeModel(self.model_id)
@@ -246,125 +230,119 @@ class GeminiClient(BaseLLMClient):
         start_time = time.time()
         
         try:
-            if not self.genai:
-                # 模拟响应，用于无API密钥的情况
-                response_text = f"[Gemini模拟响应] 对于问题: {prompt}"
-                tokens_used = 50
-            else:
-                # 配置生成参数
-                generation_config = {
-                    "temperature": temperature,
-                    "max_output_tokens": max_tokens,
-                    "top_p": 0.95,
-                    "top_k": 40,
-                }
-                
-                # 安全设置配置
-                safety_settings = {
-                    HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
-                    HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
-                    HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
-                    HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
-                }
-                
-                # 合并system_prompt和prompt
-                full_prompt = prompt
-                if system_prompt:
-                    full_prompt = f"{system_prompt}\n\n{prompt}"
-                
-                # 调用Gemini API
-                model = self.genai.GenerativeModel(self.model_id)
-                response = model.generate_content(
-                    full_prompt,
-                    generation_config=generation_config,
-                    safety_settings=safety_settings
-                )
-                
-                # 处理响应，确保text属性存在
-                response_text = ""
-                try:
-                    # 首先检查response candidates中是否有finish_reason为MAX_TOKENS的情况
-                    if response.candidates and hasattr(response.candidates[0], 'finish_reason'):
-                        candidate = response.candidates[0]
-                        finish_reason = candidate.finish_reason.name if hasattr(candidate.finish_reason, 'name') else str(candidate.finish_reason)
-                        
-                        if finish_reason == "MAX_TOKENS":
-                            logger.warning("检测到Gemini响应因达到最大tokens限制而被截断")
-                            # 即使在MAX_TOKENS的情况下，也尝试提取已经生成的内容
-                            if candidate.content and candidate.content.parts:
-                                extracted_text = "".join(str(part.text) for part in candidate.content.parts 
-                                                       if hasattr(part, 'text') and part.text is not None)
-                                if extracted_text:
-                                    logger.info("成功提取被截断的内容")
-                                    response_text = extracted_text
-                                    # 直接继续处理，不抛出异常
-                            else:
-                                # 对于MAX_TOKENS但没有内容的特殊情况
-                                logger.warning("检测到MAX_TOKENS但无法提取内容，返回默认消息")
-                                # 设置一个默认消息，而不是错误
-                                response_text = "内容因超出长度限制而被截断。"
-                                # 全局定义extracted_text变量，以便后续设置正确的finish_reason
-                                extracted_text = response_text
-                    
-                    # 如果没有被MAX_TOKENS截断，或者没能从MAX_TOKENS中提取内容，则尝试正常方式获取text
-                    if not response_text:
-                        response_text = response.text
-                except Exception as text_error:
-                    logger.warning(f"直接访问 response.text 失败: {text_error}。尝试手动解析候选项。")
-                    if response.candidates:
-                        # 从第一个候选项连接所有文本部分
-                        candidate = response.candidates[0]
+            # 配置生成参数
+            generation_config = {
+                "temperature": temperature,
+                "max_output_tokens": max_tokens,
+                "top_p": 0.95,
+                "top_k": 40,
+            }
+
+            # 安全设置配置
+            safety_settings = {
+                HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+                HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+                HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+                HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+            }
+
+            # 合并system_prompt和prompt
+            full_prompt = prompt
+            if system_prompt:
+                full_prompt = f"{system_prompt}\n\n{prompt}"
+
+            # 调用Gemini API
+            model = self.genai.GenerativeModel(self.model_id)
+            response = model.generate_content(
+                full_prompt,
+                generation_config=generation_config,
+                safety_settings=safety_settings
+            )
+
+            # 处理响应，确保text属性存在
+            response_text = ""
+            try:
+                # 首先检查response candidates中是否有finish_reason为MAX_TOKENS的情况
+                if response.candidates and hasattr(response.candidates[0], 'finish_reason'):
+                    candidate = response.candidates[0]
+                    finish_reason = candidate.finish_reason.name if hasattr(candidate.finish_reason, 'name') else str(candidate.finish_reason)
+
+                    if finish_reason == "MAX_TOKENS":
+                        logger.warning("检测到Gemini响应因达到最大tokens限制而被截断")
+                        # 即使在MAX_TOKENS的情况下，也尝试提取已经生成的内容
                         if candidate.content and candidate.content.parts:
-                            response_text = "".join(str(part.text) for part in candidate.content.parts 
-                                                 if hasattr(part, 'text') and part.text is not None)
-                        
-                if not response_text:
-                    # 如果 response_text 仍然为空，说明响应可能被阻止了或者发生了其他问题
-                    finish_reason = "Unknown"
-                    safety_ratings_str = "N/A"
-                    
-                    if response.candidates:
-                        candidate = response.candidates[0]
-                        finish_reason = candidate.finish_reason.name if hasattr(candidate.finish_reason, 'name') else str(candidate.finish_reason)
-                        safety_ratings_str = str(candidate.safety_ratings)
-                        
-                        # 特殊处理MAX_TOKENS情况，如果之前未处理
-                        if finish_reason == "MAX_TOKENS":
-                            # 即使没有内容，也返回一个优雅的消息而不是错误
-                            logger.warning(f"在第二次尝试中检测到MAX_TOKENS但无法提取内容，返回默认消息")
+                            extracted_text = "".join(str(part.text) for part in candidate.content.parts
+                                                   if hasattr(part, 'text') and part.text is not None)
+                            if extracted_text:
+                                logger.info("成功提取被截断的内容")
+                                response_text = extracted_text
+                                # 直接继续处理，不抛出异常
+                        else:
+                            # 对于MAX_TOKENS但没有内容的特殊情况
+                            logger.warning("检测到MAX_TOKENS但无法提取内容，返回默认消息")
+                            # 设置一个默认消息，而不是错误
                             response_text = "内容因超出长度限制而被截断。"
-                            extracted_text = response_text  # 设置extracted_text以标记这是MAX_TOKENS情况
-                            
-                    # 如果有一个有效的响应文本，无论是从哪里获得的，就使用它
-                    if response_text:
-                        logger.info(f"成功获取响应内容，长度: {len(response_text)}")
-                    else:
-                        # 其他情况，真正无法提取内容
-                        error_msg = f"未能从Gemini响应中提取有效文本。完成原因: {finish_reason}. 安全评级: {safety_ratings_str}"
-                        logger.error(error_msg)
-                        
-                        processing_time = time.time() - start_time
-                        self._update_task_log(
-                            task_log,
-                            output_data={"error": error_msg, "raw_response": str(response)},
-                            status="failed",
-                            tokens_used=0,
-                            processing_time=processing_time,
-                            error_msg=error_msg
-                        )
-                        return {
-                            "error": error_msg,
-                            "text": f"抱歉，无法获取Gemini响应内容。原因: {finish_reason}",
-                            "model": self.model_id
-                        }
-                
-                # 使用 countTokens API 准确计算 token 使用量
-                input_tokens = self.count_tokens(full_prompt)
-                output_tokens = self.count_tokens(response_text)
-                tokens_used = input_tokens + output_tokens
-                
-                # 记录详细的token使用情况
-                logger.debug(f"Token使用情况 - 输入: {input_tokens}, 输出: {output_tokens}, 总计: {tokens_used}")
+                            # 全局定义extracted_text变量，以便后续设置正确的finish_reason
+                            extracted_text = response_text
+
+                # 如果没有被MAX_TOKENS截断，或者没能从MAX_TOKENS中提取内容，则尝试正常方式获取text
+                if not response_text:
+                    response_text = response.text
+            except Exception as text_error:
+                logger.warning(f"直接访问 response.text 失败: {text_error}。尝试手动解析候选项。")
+                if response.candidates:
+                    # 从第一个候选项连接所有文本部分
+                    candidate = response.candidates[0]
+                    if candidate.content and candidate.content.parts:
+                        response_text = "".join(str(part.text) for part in candidate.content.parts
+                                             if hasattr(part, 'text') and part.text is not None)
+
+            if not response_text:
+                # 如果 response_text 仍然为空，说明响应可能被阻止了或者发生了其他问题
+                finish_reason = "Unknown"
+                safety_ratings_str = "N/A"
+
+                if response.candidates:
+                    candidate = response.candidates[0]
+                    finish_reason = candidate.finish_reason.name if hasattr(candidate.finish_reason, 'name') else str(candidate.finish_reason)
+                    safety_ratings_str = str(candidate.safety_ratings)
+
+                    # 特殊处理MAX_TOKENS情况，如果之前未处理
+                    if finish_reason == "MAX_TOKENS":
+                        # 即使没有内容，也返回一个优雅的消息而不是错误
+                        logger.warning(f"在第二次尝试中检测到MAX_TOKENS但无法提取内容，返回默认消息")
+                        response_text = "内容因超出长度限制而被截断。"
+                        extracted_text = response_text  # 设置extracted_text以标记这是MAX_TOKENS情况
+
+                # 如果有一个有效的响应文本，无论是从哪里获得的，就使用它
+                if response_text:
+                    logger.info(f"成功获取响应内容，长度: {len(response_text)}")
+                    # 其他情况，真正无法提取内容
+                    error_msg = f"未能从Gemini响应中提取有效文本。完成原因: {finish_reason}. 安全评级: {safety_ratings_str}"
+                    logger.error(error_msg)
+
+                    processing_time = time.time() - start_time
+                    self._update_task_log(
+                        task_log,
+                        output_data={"error": error_msg, "raw_response": str(response)},
+                        status="failed",
+                        tokens_used=0,
+                        processing_time=processing_time,
+                        error_msg=error_msg
+                    )
+                    return {
+                        "error": error_msg,
+                        "text": f"抱歉，无法获取Gemini响应内容。原因: {finish_reason}",
+                        "model": self.model_id
+                    }
+
+            # 使用 countTokens API 准确计算 token 使用量
+            input_tokens = self.count_tokens(full_prompt)
+            output_tokens = self.count_tokens(response_text)
+            tokens_used = input_tokens + output_tokens
+
+            # 记录详细的token使用情况
+            logger.debug(f"Token使用情况 - 输入: {input_tokens}, 输出: {output_tokens}, 总计: {tokens_used}")
             
             # 构建结果
             # 确定正确的finish_reason

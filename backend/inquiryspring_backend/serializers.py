@@ -3,7 +3,7 @@ InquirySpring Backend 序列化器
 """
 from rest_framework import serializers
 from inquiryspring_backend.chat.models import ChatSession, Message, Conversation
-from inquiryspring_backend.documents.models import Document, UploadedFile
+from inquiryspring_backend.documents.models import Document
 from inquiryspring_backend.quiz.models import Quiz, Question, QuizAttempt
 from inquiryspring_backend.projects.models import Project, ProjectStats
 
@@ -31,18 +31,7 @@ class ConversationSerializer(serializers.ModelSerializer):
         fields = ['id', 'title', 'created_at', 'updated_at', 'is_active', 'messages']
 
 
-class UploadedFileSerializer(serializers.ModelSerializer):
-    """上传文件序列化器"""
-    file_size_formatted = serializers.SerializerMethodField()
-    
-    class Meta:
-        model = UploadedFile
-        fields = ['id', 'filename', 'file_path', 'file_size', 'file_size_formatted', 'upload_time']
-    
-    def get_file_size_formatted(self, obj):
-        """格式化文件大小"""
-        from .utils import format_file_size
-        return format_file_size(obj.file_size)
+# 删除了UploadedFileSerializer - 现在统一使用DocumentSerializer
 
 
 class DocumentSerializer(serializers.ModelSerializer):
