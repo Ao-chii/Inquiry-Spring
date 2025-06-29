@@ -148,14 +148,22 @@ class RAGEngine:
 
     def _fix_markdown_format(self, text: str) -> str:
         """
-        修复markdown格式问题，特别是被意外分割的标题
+        修复markdown格式问题，特别是被意外分割的标题和粗体格式
         """
         if not text:
             return text
 
-        # 使用更简单但有效的方法修复被分割的标题
-        # 先处理明显的分割标题模式
+        # 修复被意外分割的粗体格式
+        # 处理 "**文本 **" 这种情况，应该是 "**文本**"
+        text = re.sub(r'\*\*([^*]+?)\s+\*\*', r'**\1**', text)
 
+        # 处理 "** 文本**" 这种情况，应该是 "**文本**"
+        text = re.sub(r'\*\*\s+([^*]+?)\*\*', r'**\1**', text)
+
+        # 处理被分割的粗体，如 "**PAL **" 应该是 "**PAL**"
+        text = re.sub(r'\*\*([^*\n]+?)\s+\*\*', r'**\1**', text)
+
+        # 修复被分割的标题
         # 修复 "# 标题\n\n字" 这种模式
         text = re.sub(r'(#+\s+[^\n]*)\n\n([^\n#\-\*]{1,10})\n\n', r'\1\2\n\n', text)
 
@@ -175,7 +183,7 @@ class RAGEngine:
         # 确保列表项格式正确
         text = re.sub(r'([^\n])(\n[-*+]\s+)', r'\1\n\2', text)
 
-        # 确保粗体格式正确
+        # 确保粗体格式正确，在粗体前后添加空格（如果需要）
         text = re.sub(r'([^\s])(\*\*[^*]+\*\*)([^\s])', r'\1 \2 \3', text)
 
         # 清理多余的空行（超过2个连续换行）
@@ -398,12 +406,12 @@ class RAGEngine:
         if not self.document or self.document.id != document_id:
             self.__init__(document_id=document_id, llm_client=self.llm_client, config=self.config)
         if not self.document: return {"error": f"找不到ID为 {document_id} 的文档。"}
-        
+
         doc_content = self.document.content
         if self.document.file:
             try: doc_content = self.document.file.read().decode('utf-8')
             except Exception: pass
-        
+
         # 使用普通的提示词渲染，不再要求JSON格式
         prompt = PromptManager.render_by_type(
             'summary',

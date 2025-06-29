@@ -54,13 +54,28 @@ class ChatView(View):
             # 确定文档上下文策略
             document_to_use = self._determine_document_context(selected_document_id)
 
+            # 获取对话历史（排除刚刚保存的用户消息）
+            conversation_history = self._get_conversation_history(conversation, exclude_last=True)
+
+            # 获取User对象（如果需要）
+            user_obj = None
+            if username:
+                try:
+                    from django.contrib.auth.models import User
+                    user_obj, _ = User.objects.get_or_create(username=username)
+                except Exception as e:
+                    logger.warning(f"获取用户对象失败: {e}")
+
             # 直接使用RAGEngine处理 - 信任其内置的智能判断
             try:
                 if document_to_use:
                     # 有文档上下文 - 让RAGEngine自己决定是否使用
                     ai_result = RAGEngine(document_id=document_to_use.id).handle_chat(
                         query=user_message,
-                        document_id=document_to_use.id
+                        document_id=document_to_use.id,
+                        conversation_history=conversation_history,
+                        user=user_obj,
+                        session_id=str(conversation.id)
                     )
                     used_document_info = {
                         'id': document_to_use.id,
@@ -68,7 +83,12 @@ class ChatView(View):
                     }
                 else:
                     # 无文档上下文 - 纯聊天模式
-                    ai_result = RAGEngine().handle_chat(query=user_message)
+                    ai_result = RAGEngine().handle_chat(
+                        query=user_message,
+                        conversation_history=conversation_history,
+                        user=user_obj,
+                        session_id=str(conversation.id)
+                    )
                     used_document_info = None
 
                 ai_response = ai_result.get("answer", "抱歉，AI服务暂时不可用")
@@ -173,6 +193,36 @@ class ChatView(View):
 
         # 如果没有选择文档，返回None，让RAGEngine处理纯聊天
         return None
+
+    def _get_conversation_history(self, conversation, exclude_last=False, max_messages=10):
+        """获取对话历史，格式化为RAGEngine期望的格式"""
+        try:
+            # 获取对话中的消息，按时间排序
+            messages = list(conversation.messages.order_by('created_at'))
+
+            if exclude_last and messages:
+                # 排除最后一条消息（通常是刚刚保存的用户消息）
+                messages = messages[:-1]
+
+            # 限制消息数量，避免上下文过长
+            if len(messages) > max_messages:
+                messages = messages[-max_messages:]
+
+            # 转换为RAGEngine期望的格式
+            history = []
+            for msg in messages:
+                history.append({
+                    'role': 'user' if msg.is_user else 'assistant',
+                    'content': msg.content,
+                    'timestamp': msg.created_at.isoformat() if msg.created_at else None
+                })
+
+            logger.info(f"获取对话历史: {len(history)} 条消息")
+            return history
+
+        except Exception as e:
+            logger.error(f"获取对话历史失败: {e}")
+            return []
 
     def get(self, request):
         """获取最新的AI回复"""
@@ -283,25 +333,46 @@ def chat_upload_document(request):
 
 @api_view(['GET'])
 def chat_documents(request):
-    """获取聊天中可用的文档列表 - 从项目管理数据库获取"""
+    """获取聊天中可用的文档列表 - 从项目管理数据库获取，支持项目过滤"""
     try:
-        # 获取用户名参数
+        # 获取参数
         username = request.GET.get('username', '')
+        project_id = request.GET.get('project_id', '')
 
         if username:
             # 如果提供了用户名，获取该用户的项目文档
             from django.contrib.auth.models import User
             try:
                 user = User.objects.get(username=username)
-                # 获取用户项目中的所有文档
+
+                # 构建查询条件
+                query_filter = {
+                    'project__user': user,
+                    'project__is_active': True,
+                    'document__is_processed': True
+                }
+
+                # 如果指定了项目ID，只获取该项目的文档
+                if project_id:
+                    query_filter['project__id'] = project_id
+                    logger.info(f"获取项目 {project_id} 的文档列表")
+                else:
+                    logger.info(f"获取用户 {username} 的所有项目文档")
+
+                # 获取用户项目中的文档
                 project_documents = ProjectDocument.objects.filter(
-                    project__user=user,
-                    project__is_active=True,
-                    document__is_processed=True
-                ).select_related('document').order_by('-document__uploaded_at')[:20]
+                    **query_filter
+                ).select_related('document', 'project').order_by('-document__uploaded_at')[:20]
 
                 documents = [pd.document for pd in project_documents]
+
+                # 记录项目信息用于调试
+                if project_documents:
+                    project_names = list(set([pd.project.name for pd in project_documents]))
+                    logger.info(f"找到文档 {len(documents)} 个，来自项目: {project_names}")
+
             except User.DoesNotExist:
+                logger.warning(f"用户不存在: {username}")
                 documents = []
         else:
             # 如果没有用户名，获取所有已处理的文档
@@ -324,7 +395,9 @@ def chat_documents(request):
 
         return Response({
             'documents': doc_list,
-            'count': len(doc_list)
+            'count': len(doc_list),
+            'project_id': project_id if project_id else None,
+            'username': username
         })
 
     except Exception as e:
