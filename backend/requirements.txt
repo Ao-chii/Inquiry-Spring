@@ -1,26 +1,11 @@
 # Django框架
-Django>=4.2.0
-djangorestframework>=3.14.0
-django-cors-headers>=4.0.0
+Django==5.2.0
+djangorestframework==3.16.0
+django-cors-headers==4.7.0
+
 
 # AI服务
 google-generativeai>=0.3.0
-
-# 文件处理
-PyPDF2>=3.0.0
-python-docx>=1.1.0
-
-# 数据处理
-pandas>=1.5.0
-numpy>=1.24.0
-
-# 环境变量管理
-python-dotenv>=1.0.0
-
-# 工具库
-werkzeug>=2.3.0
-
-# 可选：高级AI功能（如果需要使用现有的ai_services模块）
 langchain>=0.1.0
 langchain-community>=0.0.14
 langchain-huggingface>=0.0.2
@@ -28,8 +13,26 @@ rank_bm25>=0.2.2
 jieba>=0.42.1
 sentence-transformers>=2.3.0
 langchain_rerankers>=0.0.2
-# chromadb>=0.4.0
-# transformers>=4.30.0
+chromadb>=0.4.0
+transformers>=4.30.0
+
+
+# 图像和文件处理
+PyPDF2==3.0.1
+python-docx==1.1.2
+Pillow==11.1.0
+python-multipart>=0.0.6
+
+# 数据处理
+pandas==2.2.3
+numpy==2.2.5
+pydantic==2.11.5
+
+# 环境变量管理
+python-dotenv>=1.0.0
+
+# 工具库
+werkzeug>=2.3.0
 
 
 requests~=2.32.3
@@ -37,4 +40,5 @@ torch~=2.7.1
 transformers~=4.51.3
 networkx~=3.3
 neo4j~=5.28.1
-pydantic~=2.11.5
+
+
