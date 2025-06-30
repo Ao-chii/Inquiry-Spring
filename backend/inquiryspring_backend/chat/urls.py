@@ -25,4 +25,7 @@ urlpatterns = [
 
     # 聊天历史 - 前端使用 /api/chat/history/
     path('history/', views.chat_history, name='chat_history'),
+
+    # 项目聊天历史 - 前端使用 /api/chat/projects/{project_id}/conversations/
+    path('projects/<int:project_id>/conversations/', views.get_project_conversations, name='get_project_conversations'),
 ]

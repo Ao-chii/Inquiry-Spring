@@ -29,6 +29,7 @@ class ChatView(View):
             user_message = data.get('message', '').strip()
             selected_document_id = data.get('document_id')
             conversation_id = data.get('conversation_id')
+            project_id = data.get('project_id')  # 新增：项目ID
             username = data.get('username', '')
 
             if not user_message:
@@ -40,8 +41,8 @@ class ChatView(View):
             if conversation_id:
                 logger.info(f"对话ID: {conversation_id}")
 
-            # 获取或创建对话
-            conversation = self._get_or_create_conversation(conversation_id, username, user_message)
+            # 获取或创建对话（支持项目级隔离）
+            conversation = self._get_or_create_conversation(conversation_id, username, user_message, project_id)
 
             # 保存用户消息
             user_msg = Message.objects.create(
@@ -154,27 +155,41 @@ class ChatView(View):
                 'error': f'处理失败: {str(e)}'
             }, status=500)
 
-    def _get_or_create_conversation(self, conversation_id: str, username: str, user_message: str):
-        """获取或创建对话"""
+    def _get_or_create_conversation(self, conversation_id: str, username: str, user_message: str, project_id: int = None):
+        """获取或创建对话 - 支持项目级隔离"""
         conversation = None
         if conversation_id:
             try:
                 from .models import Conversation
-                conversation = Conversation.objects.get(id=conversation_id)
+                # 确保对话属于指定项目
+                conversation = Conversation.objects.get(
+                    id=conversation_id,
+                    project_id=project_id
+                )
             except Conversation.DoesNotExist:
-                logger.warning(f"对话不存在: {conversation_id}")
+                logger.warning(f"对话不存在或不属于当前项目: {conversation_id}, project_id: {project_id}")
 
         # 如果没有对话，创建新对话
         if not conversation:
             from .models import Conversation
             # 使用用户第一次输入的前30个字符作为对话标题
             title = user_message[:30] + ('...' if len(user_message) > 30 else '')
+
+            # 获取项目对象
+            project = None
+            if project_id:
+                try:
+                    project = Project.objects.get(id=project_id)
+                except Project.DoesNotExist:
+                    logger.warning(f"项目不存在: {project_id}")
+
             conversation = Conversation.objects.create(
                 username=username,
                 title=title,
-                message_count=0
+                message_count=0,
+                project=project  # 关联项目
             )
-            logger.info(f"创建新对话: {conversation.id}, 标题: {title}")
+            logger.info(f"创建新对话: {conversation.id}, 标题: {title}, 项目: {project.name if project else '无'}")
 
         return conversation
 
@@ -225,12 +240,40 @@ class ChatView(View):
             return []
 
     def get(self, request):
-        """获取最新的AI回复"""
+        """获取最新的AI回复 - 支持项目级过滤"""
         try:
+            project_id = request.GET.get('project_id')
+
+            # 如果指定了项目ID，优先从该项目的对话中获取最新消息
+            if project_id:
+                try:
+                    project = Project.objects.get(id=project_id)
+                    # 获取该项目最新的对话
+                    latest_conversation = Conversation.objects.filter(
+                        project=project
+                    ).order_by('-updated_at').first()
+
+                    if latest_conversation:
+                        # 获取该对话的最新消息
+                        latest_message = latest_conversation.messages.order_by('-created_at').first()
+                        if latest_message:
+                            response_data = {
+                                'status': 'success',
+                                'user_message': latest_message.content if latest_message.is_user else '',
+                                'ai_response': latest_message.content if not latest_message.is_user else '',
+                                'AIMessage': latest_message.content if not latest_message.is_user else '',
+                                'timestamp': latest_message.created_at.isoformat(),
+                                'conversation_id': latest_conversation.id,
+                                'project_id': project.id
+                            }
+                            return JsonResponse(response_data)
+                except Project.DoesNotExist:
+                    logger.warning(f"项目不存在: {project_id}")
+
+            # 兜底：从ChatSession获取最新记录（兼容旧版本）
             latest_message = ChatSession.objects.order_by('-timestamp').first()
 
             if latest_message:
-                # 返回包含status字段的响应，以便中间件不再包装
                 response_data = {
                     'status': 'success',
                     'user_message': latest_message.user_message,
@@ -438,10 +481,25 @@ def conversation_list(request):
     if request.method == 'GET':
         try:
             username = request.GET.get('username', '')
-            conversations = Conversation.objects.filter(
-                username=username,
-                is_active=True
-            ).order_by('-updated_at')[:20]
+            project_id = request.GET.get('project_id')  # 新增项目ID参数
+
+            # 构建查询条件
+            query_filters = {
+                'username': username,
+                'is_active': True
+            }
+
+            # 如果指定了项目ID且不为0，添加项目过滤
+            if project_id and project_id != '0':
+                try:
+                    project = Project.objects.get(id=project_id)
+                    query_filters['project'] = project
+                except Project.DoesNotExist:
+                    return Response({
+                        'error': f'项目不存在: {project_id}'
+                    }, status=status.HTTP_404_NOT_FOUND)
+
+            conversations = Conversation.objects.filter(**query_filters).order_by('-updated_at')[:20]
 
             conv_list = []
             for conv in conversations:
@@ -450,10 +508,16 @@ def conversation_list(request):
                     'title': conv.title,
                     'message_count': conv.message_count,
                     'created_at': conv.created_at.isoformat(),
-                    'updated_at': conv.updated_at.isoformat()
+                    'updated_at': conv.updated_at.isoformat(),
+                    'project_id': conv.project.id if conv.project else None,
+                    'project_name': conv.project.name if conv.project else '通用'
                 })
 
-            return Response({'conversations': conv_list})
+            return Response({
+                'conversations': conv_list,
+                'project_filter': project_id,
+                'total_count': len(conv_list)
+            })
 
         except Exception as e:
             logger.error(f"获取对话列表失败: {e}")
@@ -488,9 +552,30 @@ def conversation_list(request):
 
 @api_view(['GET', 'DELETE'])
 def conversation_detail(request, conversation_id):
-    """对话详情API"""
+    """对话详情API - 支持项目级权限验证"""
     try:
-        conversation = Conversation.objects.get(id=conversation_id)
+        # 获取项目ID参数（用于权限验证）
+        project_id = request.GET.get('project_id') or request.data.get('project_id')
+        username = request.GET.get('username') or request.data.get('username')
+
+        # 构建查询条件，确保只能访问属于指定项目的对话
+        query_filters = {'id': conversation_id}
+
+        # 如果指定了项目ID，添加项目过滤
+        if project_id:
+            try:
+                project = Project.objects.get(id=project_id)
+                query_filters['project'] = project
+            except Project.DoesNotExist:
+                return Response({
+                    'error': f'项目不存在: {project_id}'
+                }, status=status.HTTP_404_NOT_FOUND)
+
+        # 如果指定了用户名，添加用户过滤
+        if username:
+            query_filters['username'] = username
+
+        conversation = Conversation.objects.get(**query_filters)
 
         if request.method == 'GET':
             messages = conversation.messages.all().order_by('created_at')
@@ -511,17 +596,25 @@ def conversation_detail(request, conversation_id):
                     'title': conversation.title,
                     'message_count': conversation.message_count,
                     'created_at': conversation.created_at.isoformat(),
-                    'updated_at': conversation.updated_at.isoformat()
+                    'updated_at': conversation.updated_at.isoformat(),
+                    'project_id': conversation.project.id if conversation.project else None,
+                    'project_name': conversation.project.name if conversation.project else '通用'
                 },
                 'messages': message_list
             })
 
         elif request.method == 'DELETE':
+            # 删除前再次验证权限
+            if project_id and conversation.project_id != int(project_id):
+                return Response({
+                    'error': '无权限删除此对话'
+                }, status=status.HTTP_403_FORBIDDEN)
+
             conversation.delete()
             return Response({'message': '对话删除成功'})
 
     except Conversation.DoesNotExist:
-        return Response({'error': '对话不存在'}, status=status.HTTP_404_NOT_FOUND)
+        return Response({'error': '对话不存在或无权限访问'}, status=status.HTTP_404_NOT_FOUND)
     except Exception as e:
         logger.error(f"对话详情操作失败: {e}")
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -560,25 +653,57 @@ def clear_conversations(request):
 
 @api_view(['GET'])
 def chat_history(request):
-    """获取聊天历史"""
+    """获取聊天历史 - 支持项目级过滤"""
     try:
         username = request.GET.get('username', '')
+        project_id = request.GET.get('project_id')  # 新增项目ID参数
         limit = int(request.GET.get('limit', 50))
 
-        # 获取最近的聊天会话
-        sessions = ChatSession.objects.filter(
-            is_ready=True
-        ).order_by('-id')[:limit]  # 使用id排序，因为created_at字段可能为空
-
         history_list = []
-        for session in sessions:
-            history_list.append({
-                'id': session.id,
-                'user_message': session.user_message,
-                'ai_response': session.ai_response,
-                'created_at': session.created_at.isoformat() if hasattr(session, 'created_at') and session.created_at else None,
-                'is_ready': session.is_ready
-            })
+
+        # 如果指定了项目ID且不为0，从Conversation表获取项目级历史
+        if project_id and project_id != '0':
+            try:
+                project = Project.objects.get(id=project_id)
+                conversations = Conversation.objects.filter(
+                    project=project
+                ).order_by('-updated_at')[:limit]
+
+                for conv in conversations:
+                    # 获取对话的最后一条AI回复
+                    last_ai_message = conv.messages.filter(is_user=False).order_by('-created_at').first()
+                    last_user_message = conv.messages.filter(is_user=True).order_by('-created_at').first()
+
+                    if last_ai_message or last_user_message:
+                        history_list.append({
+                            'id': conv.id,
+                            'conversation_id': conv.id,
+                            'user_message': last_user_message.content if last_user_message else '',
+                            'ai_response': last_ai_message.content if last_ai_message else '',
+                            'created_at': conv.updated_at.isoformat(),
+                            'is_ready': True,
+                            'title': conv.title,
+                            'project_id': project.id,
+                            'project_name': project.name
+                        })
+
+            except Project.DoesNotExist:
+                logger.warning(f"项目不存在: {project_id}")
+
+        # 兜底：从ChatSession获取历史（兼容旧版本）
+        if not history_list:
+            sessions = ChatSession.objects.filter(
+                is_ready=True
+            ).order_by('-id')[:limit]
+
+            for session in sessions:
+                history_list.append({
+                    'id': session.id,
+                    'user_message': session.user_message,
+                    'ai_response': session.ai_response,
+                    'created_at': session.created_at.isoformat() if hasattr(session, 'created_at') and session.created_at else None,
+                    'is_ready': session.is_ready
+                })
 
         return Response({
             'history': history_list,
@@ -588,3 +713,97 @@ def chat_history(request):
     except Exception as e:
         logger.error(f"获取聊天历史失败: {e}")
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['GET'])
+def get_project_conversations(request, project_id):
+    """获取指定项目的聊天历史"""
+    try:
+        # 验证项目权限
+        try:
+            project = Project.objects.get(id=project_id)
+        except Project.DoesNotExist:
+            return Response({
+                'status': 'error',
+                'message': '项目不存在'
+            }, status=404)
+
+        # 获取项目内的对话
+        conversations = Conversation.objects.filter(
+            project=project
+        ).order_by('-updated_at')[:20]  # 最近20个对话
+
+        conversation_list = []
+        for conv in conversations:
+            # 获取最后一条消息
+            last_message = conv.messages.order_by('-created_at').first()
+
+            conversation_list.append({
+                'id': conv.id,
+                'title': conv.title,
+                'message_count': conv.message_count,
+                'last_message': last_message.content[:50] + '...' if last_message and len(last_message.content) > 50 else (last_message.content if last_message else ''),
+                'updated_at': conv.updated_at.isoformat(),
+                'project_name': conv.project.name if conv.project else '通用'
+            })
+
+        return Response({
+            'status': 'success',
+            'conversations': conversation_list,
+            'project_name': project.name,
+            'total_count': len(conversation_list)
+        })
+
+    except Exception as e:
+        logger.error(f"获取项目聊天历史失败: {e}")
+        return Response({
+            'status': 'error',
+            'message': f'获取失败: {str(e)}'
+        }, status=500)
+
+
+@api_view(['GET'])
+def get_project_conversations(request, project_id):
+    """获取指定项目的聊天历史"""
+    try:
+        # 验证项目权限
+        try:
+            project = Project.objects.get(id=project_id)
+        except Project.DoesNotExist:
+            return Response({
+                'status': 'error',
+                'message': '项目不存在'
+            }, status=404)
+
+        # 获取项目内的对话
+        conversations = Conversation.objects.filter(
+            project=project
+        ).order_by('-updated_at')[:20]  # 最近20个对话
+
+        conversation_list = []
+        for conv in conversations:
+            # 获取最后一条消息
+            last_message = conv.messages.order_by('-created_at').first()
+
+            conversation_list.append({
+                'id': conv.id,
+                'title': conv.title,
+                'message_count': conv.message_count,
+                'last_message': last_message.content[:50] + '...' if last_message and len(last_message.content) > 50 else (last_message.content if last_message else ''),
+                'updated_at': conv.updated_at.isoformat(),
+                'project_name': conv.project.name if conv.project else '通用'
+            })
+
+        return Response({
+            'status': 'success',
+            'conversations': conversation_list,
+            'project_name': project.name,
+            'total_count': len(conversation_list)
+        })
+
+    except Exception as e:
+        logger.error(f"获取项目聊天历史失败: {e}")
+        return Response({
+            'status': 'error',
+            'message': f'获取失败: {str(e)}'
+        }, status=500)

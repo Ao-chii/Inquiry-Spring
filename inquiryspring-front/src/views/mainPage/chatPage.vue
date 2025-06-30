@@ -881,6 +881,22 @@ export default {
                 })));
             },
             deep: true
+        },
+        // 监听项目切换
+        '$store.getters.getSelectedPrjId': {
+            handler(newProjectId, oldProjectId) {
+                // 只有在项目ID有效变化时才触发（排除0和undefined）
+                if (newProjectId !== oldProjectId && newProjectId > 0 && oldProjectId !== undefined) {
+                    console.log('项目切换:', oldProjectId, '->', newProjectId);
+                    // 清空当前聊天记录
+                    this.messages = [];
+                    this.currentConversationId = null;
+                    // 重新加载聊天历史和文档列表
+                    this.loadChatHistory();
+                    this.loadAvailableDocuments();
+                }
+            },
+            immediate: false
         }
     },
     methods: {
@@ -899,6 +915,13 @@ export default {
         getCurrentUsername() {
             const user = this.$store.getters.getUserInfo;
             return user && user.username ? user.username : '未登录';
+        },
+
+        // 获取当前项目ID
+        getCurrentProjectId() {
+            const projectId = this.$store.getters.getSelectedPrjId;
+            // 只有当项目ID大于0时才返回，否则返回null（表示不进行项目过滤）
+            return projectId > 0 ? projectId : null;
         },
 
         markdownToHtml(message) {
@@ -933,6 +956,12 @@ export default {
                 conversation_id: this.currentConversationId,
                 document_id: this.selectedDocumentId || null
             };
+
+            // 只有在有项目ID时才添加项目ID参数
+            const projectId = this.getCurrentProjectId();
+            if (projectId) {
+                sendData.project_id = projectId;
+            }
 
             // 添加用户消息到界面
             const userMsg = {
@@ -1231,8 +1260,16 @@ export default {
         async loadChatHistory() {
             try {
                 const username = this.getCurrentUsername();
-                const url = `${this.HOST}/chat/conversations/?username=${encodeURIComponent(username)}`;
-                console.log('加载聊天历史 - 用户:', username, '- URL:', url);
+                const projectId = this.getCurrentProjectId();
+                let url = `${this.HOST}/chat/conversations/?username=${encodeURIComponent(username)}`;
+
+                // 只有在有有效项目ID时才添加项目过滤参数
+                if (projectId) {
+                    url += `&project_id=${projectId}`;
+                    console.log('加载聊天历史 - 用户:', username, '- 项目ID:', projectId, '- URL:', url);
+                } else {
+                    console.log('加载聊天历史 - 用户:', username, '- 无项目过滤 - URL:', url);
+                }
 
                 const response = await fetch(url);
 
@@ -1293,7 +1330,20 @@ export default {
         // 新增：加载聊天会话
         async loadChatSession(session) {
             try {
-                const response = await this.apiCall('get', `${this.HOST}/chat/conversations/${session.id}/`);
+                const projectId = this.getCurrentProjectId();
+                const username = this.getCurrentUsername();
+                let url = `${this.HOST}/chat/conversations/${session.id}/`;
+
+                // 添加项目ID和用户名参数进行权限验证
+                const params = new URLSearchParams();
+                if (projectId) params.append('project_id', projectId);
+                if (username) params.append('username', username);
+
+                if (params.toString()) {
+                    url += `?${params.toString()}`;
+                }
+
+                const response = await this.apiCall('get', url);
 
                 if (response.data && response.data.messages) {
                     this.messages = response.data.messages.map(msg => ({
@@ -1429,9 +1479,24 @@ export default {
                 type: 'warning'
             }).then(async () => {
                 try {
+                    const projectId = this.getCurrentProjectId();
+                    const username = this.getCurrentUsername();
+
                     // 修复URL路径，HOST已经包含/api
                     const url = `${this.HOST}/chat/conversations/${session.id}/`;
-                    const response = await fetch(url, { method: 'DELETE' });
+
+                    // 添加项目ID和用户名进行权限验证
+                    const deleteData = {};
+                    if (projectId) deleteData.project_id = projectId;
+                    if (username) deleteData.username = username;
+
+                    const response = await fetch(url, {
+                        method: 'DELETE',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify(deleteData)
+                    });
 
                     if (response.ok) {
                         this.chatHistory = this.chatHistory.filter(s => s.id !== session.id);

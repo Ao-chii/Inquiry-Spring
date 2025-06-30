@@ -6,6 +6,16 @@ class Conversation(models.Model):
     """对话会话"""
     user = models.ForeignKey(User, on_delete=models.CASCADE, null=True, blank=True)
     username = models.CharField('用户名', max_length=100, blank=True)  # 添加username字段
+
+    # 新增：项目关联
+    project = models.ForeignKey(
+        'projects.Project',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        verbose_name='所属项目'
+    )
+
     title = models.CharField('对话标题', max_length=200, blank=True)
     message_count = models.IntegerField('消息数量', default=0)  # 添加message_count字段
     created_at = models.DateTimeField('创建时间', auto_now_add=True)
@@ -16,9 +26,15 @@ class Conversation(models.Model):
         verbose_name = '对话会话'
         verbose_name_plural = '对话会话'
         ordering = ['-updated_at']
+        # 新增：复合索引优化查询
+        indexes = [
+            models.Index(fields=['user', 'project', '-updated_at']),
+            models.Index(fields=['project', '-updated_at']),
+        ]
 
     def __str__(self):
-        return self.title or f'对话 {self.id}'
+        project_name = self.project.name if self.project else "通用"
+        return f'[{project_name}] {self.title or f"对话 {self.id}"}'
 
     def update_message_count(self):
         """更新消息数量"""

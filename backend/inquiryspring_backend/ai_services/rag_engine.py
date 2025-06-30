@@ -555,7 +555,23 @@ class RAGEngine:
             logger.warning("无文档加载，无法初始化检索器。")
             return
 
-        all_chunks = list(self.document.chunks.all())
+        # 强制刷新文档对象，避免缓存问题
+        try:
+            self.document.refresh_from_db()
+        except Exception as e:
+            logger.warning(f"刷新文档对象失败: {e}")
+
+        # 使用直接查询避免ORM缓存问题
+        from ..documents.models import DocumentChunk
+        all_chunks = list(DocumentChunk.objects.filter(document=self.document))
+
+        if not all_chunks:
+            # 如果还是没有分块，尝试重新查询一次（可能是事务问题）
+            logger.warning(f"文档 {self.document.id} 第一次查询未找到文本块，尝试重新查询...")
+            import time
+            time.sleep(0.1)  # 短暂等待，让数据库事务完成
+            all_chunks = list(DocumentChunk.objects.filter(document=self.document))
+
         if not all_chunks:
             logger.warning(f"文档 {self.document.id} 不包含任何文本块，跳过检索器初始化。")
             return
